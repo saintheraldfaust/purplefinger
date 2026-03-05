@@ -18,7 +18,7 @@ mkdir -p "$MODELS_DIR" "$PKGS_DIR" "$CODE_DIR"
 export PYTHONPATH="$PKGS_DIR:$PYTHONPATH"
 
 # --- [1/4] Python packages (cached in volume) ---
-MARKER="$WORKSPACE/.packages-installed-v1"
+MARKER="$WORKSPACE/.packages-installed-v2"
 if [ ! -f "$MARKER" ]; then
   echo "[1/4] Installing Python packages (first time — cached after this)..."
   pip install --quiet --target "$PKGS_DIR" \
@@ -38,6 +38,10 @@ if [ ! -f "$MARKER" ]; then
 else
   echo "[1/4] Python packages already cached — skipping."
 fi
+
+# Fix basicsr compatibility with torchvision >= 0.16 (functional_tensor was removed)
+find "$PKGS_DIR" -path "*/basicsr/data/degradations.py" -exec sed -i \
+  's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' {} \;
 
 # --- [2/4] Code (always pull latest) ---
 echo "[2/4] Fetching latest code from GitHub..."
