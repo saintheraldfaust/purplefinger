@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 from aiohttp import web
 import aiohttp_cors
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, RTCConfiguration, RTCIceServer
 from aiortc.contrib.media import MediaRelay
 from av import VideoFrame
 from PIL import Image
@@ -32,6 +32,19 @@ log = logging.getLogger('chimera')
 pipeline = FaceSwapPipeline(PipelineConfig())
 relay = MediaRelay()
 peer_connections = set()
+
+TURN_CONFIG = RTCConfiguration(iceServers=[
+    RTCIceServer(urls=['stun:stun.l.google.com:19302']),
+    RTCIceServer(
+        urls=[
+            'turn:openrelay.metered.ca:80',
+            'turn:openrelay.metered.ca:443',
+            'turn:openrelay.metered.ca:443?transport=tcp',
+        ],
+        username='openrelayproject',
+        credential='openrelayproject',
+    ),
+])
 
 
 # --- Transformed video track ---
@@ -64,7 +77,7 @@ async def handle_offer(request):
     params = await request.json()
     offer = RTCSessionDescription(sdp=params['sdp'], type=params['type'])
 
-    pc = RTCPeerConnection()
+    pc = RTCPeerConnection(configuration=TURN_CONFIG)
     peer_connections.add(pc)
 
     @pc.on('connectionstatechange')
