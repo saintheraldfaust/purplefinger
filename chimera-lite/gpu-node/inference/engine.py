@@ -27,6 +27,8 @@ class SwapEngine:
       - InsightFace buffalo_l       (auto-downloaded on first run to ~/.insightface/)
     """
 
+    DETECT_EVERY_N = 3   # run face detection every N frames, reuse cached faces between
+
     def __init__(self, model_path: str = 'models/inswapper_128.onnx'):
         import insightface
         from insightface.app import FaceAnalysis
@@ -34,7 +36,7 @@ class SwapEngine:
 
         log.info('Loading InsightFace buffalo_l...')
         self.app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        self.app.prepare(ctx_id=0, det_size=(640, 640))
+        self.app.prepare(ctx_id=0, det_size=(320, 320))   # 320 is 4x faster than 640
 
         log.info('Loading inswapper_128 from %s...', model_path)
         self.swapper = insightface.model_zoo.get_model(
@@ -43,6 +45,8 @@ class SwapEngine:
         )
 
         self._source_face = None  # cached after set_identity()
+        self._cached_target_faces = []   # faces detected in last detection frame
+        self._frame_idx = 0
 
     def set_identity(self, image: np.ndarray):
         """Extract and cache the source face embedding from the identity image."""
@@ -58,12 +62,19 @@ class SwapEngine:
         if self._source_face is None:
             return frame
 
-        faces = self.app.get(frame)
-        if not faces:
+        self._frame_idx += 1
+
+        # Only run expensive face detection every N frames
+        if self._frame_idx % self.DETECT_EVERY_N == 1 or not self._cached_target_faces:
+            faces = self.app.get(frame)
+            if faces:
+                self._cached_target_faces = faces
+
+        if not self._cached_target_faces:
             return frame
 
         result = frame.copy()
-        for face in faces:
+        for face in self._cached_target_faces:
             result = self.swapper.get(result, face, self._source_face, paste_back=True)
         return result
 

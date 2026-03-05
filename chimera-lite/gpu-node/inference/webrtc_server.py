@@ -48,25 +48,74 @@ TURN_CONFIG = RTCConfiguration(iceServers=[
 ])
 
 
+# --- Helpers ---
+_loop = None          # set in build_app()
+
+def _process_sync(img):
+    """CPU/GPU-bound work — runs in thread pool."""
+    return pipeline.process_frame(img)
+
+
 # --- Transformed video track ---
 class SwappedVideoTrack(VideoStreamTrack):
-    """Wraps an incoming video track and applies the face swap pipeline per frame."""
+    """
+    Wraps an incoming video track and applies the face swap pipeline.
+    Drops stale frames so we always process the *latest* camera frame
+    instead of queuing up a backlog.
+    """
 
     kind = 'video'
 
     def __init__(self, source_track):
         super().__init__()
         self._source = source_track
+        self._processing = False
+        self._last_good = None        # last successfully swapped frame
 
     async def recv(self):
         frame = await self._source.recv()
 
-        img = frame.to_ndarray(format='bgr24')
+        # If we're still processing the previous frame, return last good frame
+        # (drop this one to avoid building a queue)
+        if self._processing:
+            if self._last_good is not None:
+                out = VideoFrame.from_ndarray(self._last_good, format='bgr24')
+                out.pts = frame.pts
+                out.time_base = frame.time_base
+                return out
+            return frame
+
+        self._processing = True
         try:
-            swapped = pipeline.process_frame(img)
+            img = frame.to_ndarray(format='bgr24')
+
+            # Downscale to 480p for processing, then upscale back
+            h, w = img.shape[:2]
+            target_h = 480
+            if h > target_h:
+                scale = target_h / h
+                small = cv2.resize(img, (int(w * scale), target_h))
+            else:
+                small = img
+                scale = 1.0
+
+            # Run pipeline off the event loop
+            swapped_small = await _loop.run_in_executor(None, _process_sync, small)
+
+            # Scale back if needed
+            if scale < 1.0:
+                swapped = cv2.resize(swapped_small, (w, h))
+            else:
+                swapped = swapped_small
+
+            self._last_good = swapped
         except Exception as e:
             log.warning('Pipeline error on frame: %s', e)
             swapped = img
+            self._last_good = swapped
+        finally:
+            self._processing = False
+
         new_frame = VideoFrame.from_ndarray(swapped, format='bgr24')
         new_frame.pts = frame.pts
         new_frame.time_base = frame.time_base
@@ -132,6 +181,9 @@ async def on_shutdown(app):
 
 
 def build_app():
+    global _loop
+    _loop = asyncio.get_event_loop()
+
     app = web.Application()
 
     cors = aiohttp_cors.setup(app, defaults={
