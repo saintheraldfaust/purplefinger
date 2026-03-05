@@ -34,6 +34,7 @@ relay = MediaRelay()
 peer_connections = set()
 
 TURN_CONFIG = RTCConfiguration(iceServers=[
+    RTCIceServer(urls=['stun:stun.l.google.com:19302']),
     RTCIceServer(urls=['stun:stun.relay.metered.ca:80']),
     RTCIceServer(
         urls=[
