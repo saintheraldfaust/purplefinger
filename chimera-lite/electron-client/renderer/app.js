@@ -41,6 +41,7 @@ async function startWebRTC(ip, port) {
 
   pc = new RTCPeerConnection({
     iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun.relay.metered.ca:80' },
       { urls: 'turn:global.relay.metered.ca:80',               username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
       { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
@@ -50,6 +51,14 @@ async function startWebRTC(ip, port) {
 
   for (const track of localStream.getTracks()) {
     pc.addTrack(track, localStream);
+  }
+
+  // Force H264 — aiortc's VP8 decoder (libvpx) is broken on the GPU image
+  const videoTx = pc.getTransceivers().find(t => t.sender.track?.kind === 'video');
+  if (videoTx && RTCRtpSender.getCapabilities) {
+    const caps = RTCRtpSender.getCapabilities('video');
+    const h264 = caps.codecs.filter(c => c.mimeType === 'video/H264');
+    if (h264.length > 0) videoTx.setCodecPreferences(h264);
   }
 
   pc.ontrack = (event) => {
