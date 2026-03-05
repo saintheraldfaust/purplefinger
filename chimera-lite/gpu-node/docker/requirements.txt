@@ -1,0 +1,28 @@
+# PyTorch (CUDA 12.1)
+torch==2.3.1+cu121
+torchvision==0.18.1+cu121
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# Inference
+onnxruntime-gpu==1.18.0
+onnx==1.16.1
+
+# Face swap + detection
+insightface==0.7.3
+
+# CodeFormer (face enhancement)
+basicsr==1.4.2
+facexlib==0.3.0
+realesrgan==0.3.0
+
+# Vision
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
+Pillow==10.3.0
+scipy==1.13.1
+
+# WebRTC server
+aiortc==1.9.0
+aiohttp==3.9.5
+aiohttp-cors==0.7.0
+av==12.0.0

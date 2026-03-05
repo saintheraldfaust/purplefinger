@@ -1,0 +1,6 @@
+models/*.onnx
+models/*.plan
+models/*.caffemodel
+models/*.prototxt
+__pycache__/
+*.pyc
