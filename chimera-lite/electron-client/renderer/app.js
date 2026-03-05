@@ -42,10 +42,9 @@ async function startWebRTC(ip, port) {
   pc = new RTCPeerConnection({
     iceServers: [
       { urls: 'stun:stun.relay.metered.ca:80' },
-      { urls: 'turn:global.relay.metered.ca:80',                    username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
-      { urls: 'turn:global.relay.metered.ca:80?transport=tcp',      username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
-      { urls: 'turn:global.relay.metered.ca:443',                   username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
-      { urls: 'turns:global.relay.metered.ca:443?transport=tcp',    username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
+      { urls: 'turn:global.relay.metered.ca:80',               username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
+      { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
+      { urls: 'turn:global.relay.metered.ca:443',              username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
     ],
   });
 
