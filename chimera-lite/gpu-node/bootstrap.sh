@@ -7,7 +7,7 @@ set -e
 echo "=== Chimera Lite Bootstrap ==="
 
 # Ensure basic tools are available (minimal images don't include wget/git)
-apt-get update -qq && apt-get install -y -qq wget git
+apt-get update -qq && apt-get install -y -qq wget git build-essential
 
 WORKSPACE="/workspace"
 MODELS_DIR="$WORKSPACE/models"
