@@ -40,7 +40,6 @@ TURN_CONFIG = RTCConfiguration(iceServers=[
             'turn:global.relay.metered.ca:80',
             'turn:global.relay.metered.ca:80?transport=tcp',
             'turn:global.relay.metered.ca:443',
-            'turns:global.relay.metered.ca:443?transport=tcp',
         ],
         username='4f5aec68a87bea53ff28aba4',
         credential='1kfKtDRUDxLPNhrT',
