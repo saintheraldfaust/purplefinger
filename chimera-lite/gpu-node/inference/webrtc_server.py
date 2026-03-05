@@ -52,7 +52,7 @@ TURN_CONFIG = RTCConfiguration(iceServers=[
 class SwappedVideoTrack(VideoStreamTrack):
     """
     Wraps an incoming video track and applies the face swap pipeline.
-    Downscales to 480p for faster processing.
+    Downscales to 360p for faster processing.
     Runs synchronously — aiortc handles threading internally.
     """
 
@@ -69,8 +69,8 @@ class SwappedVideoTrack(VideoStreamTrack):
             img = frame.to_ndarray(format='bgr24')
             h, w = img.shape[:2]
 
-            # Downscale to 480p for faster pipeline processing
-            target_h = 480
+            # Downscale to 360p for faster pipeline processing
+            target_h = 360
             if h > target_h:
                 scale = target_h / h
                 small = cv2.resize(img, (int(w * scale), target_h), interpolation=cv2.INTER_LINEAR)

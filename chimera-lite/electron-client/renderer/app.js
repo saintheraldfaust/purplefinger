@@ -36,7 +36,15 @@ async function startWebRTC(ip, port) {
   const GPU_URL = `http://${ip}:${port}`;
 
   setLog('Requesting camera...');
-  localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  // Keep capture small + low FPS to maintain real-time swapping.
+  localStream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      width: { ideal: 640 },
+      height: { ideal: 360 },
+      frameRate: { ideal: 15, max: 15 },
+    },
+    audio: false,
+  });
   localVideo.srcObject = localStream;
 
   pc = new RTCPeerConnection({
