@@ -6,7 +6,6 @@ const facePreview = document.getElementById('face-preview');
 const statusBadge = document.getElementById('status-badge');
 const log         = document.getElementById('log');
 const videoCard   = document.getElementById('video-card');
-const remoteVideo = document.getElementById('remote-video');
 const localVideo  = document.getElementById('local-video');
 
 function setStatus(text, cls) {
@@ -24,89 +23,108 @@ function setLoading(loading) {
   btnUpload.disabled = loading;
 }
 
-// --- WebRTC state ---
-let pc          = null;
-let localStream = null;
-let gpuIp       = null;
-let gpuPort     = null;
+// --- WebSocket stream state ---
+let ws           = null;
+let localStream  = null;
+let captureVideo = null;   // hidden <video> to pull frames from
+let captureCanvas = null;  // off-screen canvas for JPEG encoding
+let captureCtx   = null;
+let captureTimer = null;
+let waitingReply = false;  // lockstep: don't send until last frame returns
+let gpuIp        = null;
+let gpuPort      = null;
 
-async function startWebRTC(ip, port) {
+async function startStreaming(ip, port) {
   gpuIp = ip;
   gpuPort = port;
-  const GPU_URL = `http://${ip}:${port}`;
 
   setLog('Requesting camera...');
-  // Keep capture small + low FPS to maintain real-time swapping.
   localStream = await navigator.mediaDevices.getUserMedia({
     video: {
-      width: { ideal: 640 },
-      height: { ideal: 360 },
+      width:     { ideal: 640 },
+      height:    { ideal: 360 },
       frameRate: { ideal: 15, max: 15 },
     },
     audio: false,
   });
+
+  // PiP preview
   localVideo.srcObject = localStream;
 
-  pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      // Open Relay Project — free, no account, separate from Metered paid tier
-      { urls: 'turn:openrelay.metered.ca:80',               username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:80?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:443',              username: 'openrelayproject', credential: 'openrelayproject' },
-    ],
-  });
+  // Hidden video element — canvas reads from this, avoids re-capturing stream
+  captureVideo = document.createElement('video');
+  captureVideo.srcObject = localStream;
+  captureVideo.muted = true;
+  captureVideo.playsInline = true;
+  await captureVideo.play();
 
-  for (const track of localStream.getTracks()) {
-    pc.addTrack(track, localStream);
-  }
+  // Off-screen canvas for encoding outbound frames
+  captureCanvas = document.createElement('canvas');
+  captureCanvas.width  = 640;
+  captureCanvas.height = 360;
+  captureCtx = captureCanvas.getContext('2d');
 
-  // Force H264 — aiortc's VP8 decoder (libvpx) is broken on the GPU image
-  const videoTx = pc.getTransceivers().find(t => t.sender.track?.kind === 'video');
-  if (videoTx && RTCRtpSender.getCapabilities) {
-    const caps = RTCRtpSender.getCapabilities('video');
-    const h264 = caps.codecs.filter(c => c.mimeType === 'video/H264');
-    if (h264.length > 0) videoTx.setCodecPreferences(h264);
-  }
+  // Display canvas for inbound (swapped) frames
+  const displayCanvas = document.getElementById('remote-canvas');
+  displayCanvas.width  = 640;
+  displayCanvas.height = 360;
+  const displayCtx = displayCanvas.getContext('2d');
 
-  pc.ontrack = (event) => {
-    remoteVideo.srcObject = event.streams[0];
+  ws = new WebSocket(`ws://${ip}:${port}/ws`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    videoCard.style.display = 'flex';
+    setLog(`Streaming — ${ip}:${port}`);
+
+    // Tick at 15 fps; natural back-pressure via waitingReply keeps it paced to GPU speed
+    captureTimer = setInterval(() => {
+      if (waitingReply || ws.readyState !== WebSocket.OPEN) return;
+      captureCtx.drawImage(captureVideo, 0, 0, 640, 360);
+      captureCanvas.toBlob((blob) => {
+        if (!blob || ws.readyState !== WebSocket.OPEN) return;
+        blob.arrayBuffer().then((buf) => {
+          ws.send(buf);
+          waitingReply = true;
+        });
+      }, 'image/jpeg', 0.80);
+    }, 1000 / 15);
   };
 
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
+  ws.onmessage = (event) => {
+    waitingReply = false;
+    // Decode returned JPEG and paint onto display canvas
+    const blob = new Blob([event.data], { type: 'image/jpeg' });
+    createImageBitmap(blob).then((bitmap) => {
+      displayCtx.drawImage(bitmap, 0, 0, displayCanvas.width, displayCanvas.height);
+    });
+  };
 
-  // Wait for ICE gathering (max 3s)
-  await new Promise((resolve) => {
-    if (pc.iceGatheringState === 'complete') return resolve();
-    const done = () => { if (pc.iceGatheringState === 'complete') resolve(); };
-    pc.addEventListener('icegatheringstatechange', done);
-    setTimeout(resolve, 3000);
-  });
-
-  setLog('Connecting to GPU node...');
-  const res = await fetch(`${GPU_URL}/offer`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
-  });
-
-  if (!res.ok) throw new Error(`GPU signaling failed: ${res.status}`);
-
-  const answer = await res.json();
-  await pc.setRemoteDescription(new RTCSessionDescription(answer));
-
-  videoCard.style.display = 'flex';
-  setLog(`Streaming — ${ip}:${port}`);
+  ws.onerror = () => setLog('Stream error — check GPU pod');
+  ws.onclose = () => {
+    waitingReply = false;
+    if (gpuIp) setLog('Stream disconnected');
+  };
 }
 
-function stopWebRTC() {
-  if (pc) { pc.close(); pc = null; }
-  if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
-  remoteVideo.srcObject = null;
-  localVideo.srcObject  = null;
-  videoCard.style.display = 'none';
+function stopStreaming() {
   gpuIp = null;
+  clearInterval(captureTimer);
+  captureTimer = null;
+  waitingReply = false;
+
+  if (ws) { ws.close(); ws = null; }
+  if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
+  if (captureVideo) { captureVideo.srcObject = null; captureVideo = null; }
+
+  localVideo.srcObject = null;
+
+  const displayCanvas = document.getElementById('remote-canvas');
+  if (displayCanvas) {
+    displayCanvas.getContext('2d').clearRect(0, 0, displayCanvas.width, displayCanvas.height);
+  }
+
+  videoCard.style.display = 'none';
 }
 
 // --- Face Upload ---
@@ -144,7 +162,7 @@ btnStart.addEventListener('click', async () => {
     btnStop.disabled       = false;
     btnUpload.disabled     = false;
 
-    await startWebRTC(data.endpoint.ip, data.endpoint.port);
+    await startStreaming(data.endpoint.ip, data.endpoint.port);
   } catch (err) {
     setStatus('Error', 'error');
     setLog('Failed to start: ' + err.message);
@@ -158,7 +176,7 @@ btnStop.addEventListener('click', async () => {
   setLog('Terminating GPU pod...');
   setLoading(true);
 
-  stopWebRTC();
+  stopStreaming();
 
   try {
     await window.chimera.stopSession();
@@ -174,7 +192,7 @@ btnStop.addEventListener('click', async () => {
   setLoading(false);
 });
 
-// --- Init: check existing session ---
+// --- Init: reconnect to existing session ---
 (async () => {
   try {
     const data = await window.chimera.getStatus();
@@ -182,8 +200,9 @@ btnStop.addEventListener('click', async () => {
       setStatus('Active', 'active');
       btnStart.style.display = 'none';
       btnStop.style.display  = 'block';
-      setLog('Reconnecting WebRTC...');
-      await startWebRTC(data.endpoint.ip, data.endpoint.port);
+      setLog('Reconnecting...');
+      await startStreaming(data.endpoint.ip, data.endpoint.port);
     }
   } catch (_) {}
 })();
+

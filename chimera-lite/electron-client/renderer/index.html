@@ -97,7 +97,7 @@
       overflow: hidden;
     }
 
-    #remote-video {
+    #remote-canvas {
       width: 100%;
       height: 100%;
       object-fit: cover;
@@ -150,7 +150,7 @@
   <div class="card" id="video-card">
     <label>Live Output</label>
     <div id="video-wrap">
-      <video id="remote-video" autoplay playsinline muted></video>
+      <canvas id="remote-canvas"></canvas>
       <video id="local-video"  autoplay playsinline muted></video>
     </div>
     <div id="video-sublabel">pip: your camera &nbsp;→&nbsp; main: swapped output</div>
