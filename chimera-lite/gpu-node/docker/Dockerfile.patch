@@ -1,0 +1,4 @@
+FROM ghcr.io/saintheraldfaust/chimera-lite-gpu:latest
+WORKDIR /app
+COPY bootstrap.sh .
+RUN chmod +x bootstrap.sh

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src *; media-src *; img-src 'self' blob: data:" />
+  <title>Chimera Lite</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d0d;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      padding: 24px;
+      overflow-y: auto;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: #c084fc;
+    }
+
+    #status-badge {
+      font-size: 0.85rem;
+      padding: 4px 14px;
+      border-radius: 999px;
+      background: #1e1e1e;
+      color: #888;
+      border: 1px solid #333;
+    }
+    #status-badge.active { background: #14532d; color: #4ade80; border-color: #166534; }
+    #status-badge.loading { background: #1c1917; color: #fbbf24; border-color: #78350f; }
+    #status-badge.error { background: #450a0a; color: #f87171; border-color: #7f1d1d; }
+
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 24px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .card label {
+      font-size: 0.8rem;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    #face-preview {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid #c084fc;
+      display: none;
+    }
+
+    .face-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    button {
+      padding: 12px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #btn-upload { background: #3b3b3b; color: #e0e0e0; }
+    #btn-start  { background: #7c3aed; color: #fff; width: 100%; padding: 14px; }
+    #btn-stop   { background: #991b1b; color: #fff; width: 100%; padding: 14px; display: none; }
+
+    #video-card { display: none; }
+
+    #video-wrap {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16/9;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    #remote-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #local-video {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      width: 90px;
+      height: 68px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid #444;
+      opacity: 0.85;
+    }
+
+    #video-sublabel {
+      font-size: 0.7rem;
+      color: #444;
+      text-align: right;
+    }
+
+    #log {
+      font-size: 0.75rem;
+      color: #555;
+      text-align: center;
+      min-height: 1.2em;
+    }
+
+    input[type="file"] { display: none; }
+  </style>
+</head>
+<body>
+  <h1>CHIMERA LITE</h1>
+  <div id="status-badge">Idle</div>
+
+  <div class="card">
+    <label>Identity Face</label>
+    <div class="face-row">
+      <img id="face-preview" alt="face" />
+      <button id="btn-upload">Choose Photo</button>
+    </div>
+    <input type="file" id="face-input" accept="image/*" />
+  </div>
+
+  <button id="btn-start">Start Session</button>
+  <button id="btn-stop">Stop Session</button>
+
+  <div class="card" id="video-card">
+    <label>Live Output</label>
+    <div id="video-wrap">
+      <video id="remote-video" autoplay playsinline muted></video>
+      <video id="local-video"  autoplay playsinline muted></video>
+    </div>
+    <div id="video-sublabel">pip: your camera &nbsp;→&nbsp; main: swapped output</div>
+  </div>
+
+  <div id="log"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

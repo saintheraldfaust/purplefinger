@@ -1,0 +1,80 @@
+#!/bin/bash
+# Chimera Lite GPU Node Bootstrap — no-Docker edition
+# Runs on pod startup via RunPod template Docker Command.
+# Requires: network volume mounted at /workspace
+set -e
+
+echo "=== Chimera Lite Bootstrap ==="
+
+WORKSPACE="/workspace"
+MODELS_DIR="$WORKSPACE/models"
+PKGS_DIR="$WORKSPACE/site-packages"
+CODE_DIR="/app"
+REPO_URL="https://github.com/saintheraldfaust/purplefinger.git"
+
+mkdir -p "$MODELS_DIR" "$PKGS_DIR" "$CODE_DIR"
+
+# Add volume packages to Python path for this session
+export PYTHONPATH="$PKGS_DIR:$PYTHONPATH"
+
+# --- [1/4] Python packages (cached in volume) ---
+MARKER="$WORKSPACE/.packages-installed-v1"
+if [ ! -f "$MARKER" ]; then
+  echo "[1/4] Installing Python packages (first time — cached after this)..."
+  pip install --quiet --target "$PKGS_DIR" \
+    insightface \
+    onnxruntime-gpu \
+    aiortc \
+    aiohttp \
+    aiohttp-cors \
+    opencv-python-headless \
+    numpy \
+    Pillow \
+    basicsr \
+    facexlib \
+    gfpgan
+  touch "$MARKER"
+  echo "[1/4] Packages installed and cached."
+else
+  echo "[1/4] Python packages already cached — skipping."
+fi
+
+# --- [2/4] Code (always pull latest) ---
+echo "[2/4] Fetching latest code from GitHub..."
+if [ ! -d "$CODE_DIR/.git" ]; then
+  git clone --depth 1 "$REPO_URL" "$CODE_DIR"
+else
+  git -C "$CODE_DIR" pull --ff-only
+fi
+
+# Point /app/models at the volume models dir
+ln -sfn "$MODELS_DIR" "$CODE_DIR/models"
+
+# --- [3/4] Models (cached in volume) ---
+if [ ! -f "$MODELS_DIR/deploy.prototxt" ]; then
+  echo "[3/4] Downloading OpenCV face detector..."
+  wget -q -O "$MODELS_DIR/deploy.prototxt" \
+    "https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt"
+  wget -q -O "$MODELS_DIR/res10_300x300_ssd_iter_140000.caffemodel" \
+    "https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel"
+fi
+
+if [ ! -f "$MODELS_DIR/codeformer.pth" ]; then
+  echo "[3/4] Downloading CodeFormer weights (~500MB)..."
+  wget -q --show-progress -O "$MODELS_DIR/codeformer.pth" \
+    "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/codeformer.pth"
+fi
+
+if [ ! -f "$MODELS_DIR/inswapper_128.onnx" ]; then
+  echo "[3/4] Downloading inswapper_128.onnx (~500MB)..."
+  wget -q --show-progress -O "$MODELS_DIR/inswapper_128.onnx" \
+    "https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx"
+fi
+
+echo "[3/4] All models ready."
+
+# --- [4/4] Start inference server ---
+echo ""
+echo "=== Starting inference server ==="
+cd "$CODE_DIR"
+exec python chimera-lite/gpu-node/inference/webrtc_server.py
