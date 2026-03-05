@@ -48,7 +48,11 @@ class SwappedVideoTrack(VideoStreamTrack):
         frame = await self._source.recv()
 
         img = frame.to_ndarray(format='bgr24')
-        swapped = pipeline.process_frame(img)
+        try:
+            swapped = pipeline.process_frame(img)
+        except Exception as e:
+            log.warning('Pipeline error on frame: %s', e)
+            swapped = img
         new_frame = VideoFrame.from_ndarray(swapped, format='bgr24')
         new_frame.pts = frame.pts
         new_frame.time_base = frame.time_base

@@ -85,13 +85,8 @@ app.post('/stop', requireToken, async (req, res) => {
   clearTimeout(timeoutHandle);
   activeSession = null;
 
-  try {
-    await stopPod(podId);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Failed to stop pod:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  res.json({ ok: true });
+  stopPod(podId).catch(err => console.error('Failed to terminate pod (may already be gone):', err.message));
 });
 
 // POST /upload-face — store face image and forward to GPU if running
