@@ -13,6 +13,10 @@ import fractions
 import time
 from io import BytesIO
 
+# FPS tracking (module-level so it persists across recv() calls)
+_fps_frame_count = 0
+_fps_window_start = 0.0
+
 import cv2
 import numpy as np
 from aiohttp import web
@@ -63,36 +67,52 @@ class SwappedVideoTrack(VideoStreamTrack):
         self._source = source_track
 
     async def recv(self):
+        global _fps_frame_count, _fps_window_start
+
         frame = await self._source.recv()
 
+        img = frame.to_ndarray(format='bgr24')
+        h, w = img.shape[:2]
+
+        # Downscale to 360p for faster pipeline processing
+        target_h = 360
+        if h > target_h:
+            scale = target_h / h
+            small = cv2.resize(img, (int(w * scale), target_h), interpolation=cv2.INTER_LINEAR)
+        else:
+            small = img
+            scale = 1.0
+
         try:
-            img = frame.to_ndarray(format='bgr24')
-            h, w = img.shape[:2]
-
-            # Downscale to 360p for faster pipeline processing
-            target_h = 360
-            if h > target_h:
-                scale = target_h / h
-                small = cv2.resize(img, (int(w * scale), target_h), interpolation=cv2.INTER_LINEAR)
-            else:
-                small = img
-                scale = 1.0
-
-            swapped_small = pipeline.process_frame(small)
-
-            # Scale back to original resolution
-            if scale < 1.0:
-                swapped = cv2.resize(swapped_small, (w, h), interpolation=cv2.INTER_LINEAR)
-            else:
-                swapped = swapped_small
-
-            new_frame = VideoFrame.from_ndarray(swapped, format='bgr24')
-            new_frame.pts = frame.pts
-            new_frame.time_base = frame.time_base
-            return new_frame
+            t0 = time.perf_counter()
+            # asyncio.to_thread uses get_running_loop() — always correct context
+            swapped_small = await asyncio.to_thread(pipeline.process_frame, small)
+            frame_ms = (time.perf_counter() - t0) * 1000
         except Exception as e:
             log.warning('Pipeline error on frame: %s', e)
-            return frame
+            swapped_small = small
+            frame_ms = 0.0
+
+        # FPS log every 30 frames
+        _fps_frame_count += 1
+        now = time.perf_counter()
+        if _fps_window_start == 0.0:
+            _fps_window_start = now
+        elif _fps_frame_count % 30 == 0:
+            fps = 30.0 / max(now - _fps_window_start, 1e-6)
+            log.info('Pipeline  FPS=%.1f  last_frame=%.0fms', fps, frame_ms)
+            _fps_window_start = now
+
+        # Scale back to original resolution
+        if scale < 1.0:
+            swapped = cv2.resize(swapped_small, (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            swapped = swapped_small
+
+        new_frame = VideoFrame.from_ndarray(swapped, format='bgr24')
+        new_frame.pts = frame.pts
+        new_frame.time_base = frame.time_base
+        return new_frame
 
 
 # --- WebRTC signaling ---
