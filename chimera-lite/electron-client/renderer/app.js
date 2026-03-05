@@ -28,10 +28,12 @@ function setLoading(loading) {
 let pc          = null;
 let localStream = null;
 let gpuIp       = null;
+let gpuPort     = null;
 
-async function startWebRTC(ip) {
+async function startWebRTC(ip, port) {
   gpuIp = ip;
-  const GPU_URL = `http://${ip}:8765`;
+  gpuPort = port;
+  const GPU_URL = `http://${ip}:${port}`;
 
   setLog('Requesting camera...');
   localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
@@ -73,7 +75,7 @@ async function startWebRTC(ip) {
   await pc.setRemoteDescription(new RTCSessionDescription(answer));
 
   videoCard.style.display = 'flex';
-  setLog(`Streaming — ${ip}:8765`);
+  setLog(`Streaming — ${ip}:${port}`);
 }
 
 function stopWebRTC() {
@@ -120,7 +122,7 @@ btnStart.addEventListener('click', async () => {
     btnStop.disabled       = false;
     btnUpload.disabled     = false;
 
-    await startWebRTC(data.endpoint.ip);
+    await startWebRTC(data.endpoint.ip, data.endpoint.port);
   } catch (err) {
     setStatus('Error', 'error');
     setLog('Failed to start: ' + err.message);
@@ -159,7 +161,7 @@ btnStop.addEventListener('click', async () => {
       btnStart.style.display = 'none';
       btnStop.style.display  = 'block';
       setLog('Reconnecting WebRTC...');
-      await startWebRTC(data.endpoint.ip);
+      await startWebRTC(data.endpoint.ip, data.endpoint.port);
     }
   } catch (_) {}
 })();
