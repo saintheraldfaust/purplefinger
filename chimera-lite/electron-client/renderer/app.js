@@ -50,10 +50,10 @@ async function startWebRTC(ip, port) {
   pc = new RTCPeerConnection({
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun.relay.metered.ca:80' },
-      { urls: 'turn:global.relay.metered.ca:80',               username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
-      { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
-      { urls: 'turn:global.relay.metered.ca:443',              username: '4f5aec68a87bea53ff28aba4', credential: '1kfKtDRUDxLPNhrT' },
+      // Open Relay Project — free, no account, separate from Metered paid tier
+      { urls: 'turn:openrelay.metered.ca:80',               username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:80?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443',              username: 'openrelayproject', credential: 'openrelayproject' },
     ],
   });
 
