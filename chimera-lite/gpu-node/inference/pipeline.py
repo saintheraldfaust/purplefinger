@@ -17,8 +17,10 @@ log = logging.getLogger('chimera.pipeline')
 
 
 class PipelineConfig:
-    ENHANCE_EVERY_N = 1     # Run CodeFormer every N frames (1 = every frame, 2 = every other, etc.)
-                            # Increase if you need more FPS at some quality cost.
+    # 0 = disabled (real-time mode). CodeFormer at 512px takes 100-300ms/frame
+    # — cripples FPS if enabled every frame. Set to e.g. 30 to run it once per
+    # second at 30fps for a quality boost without impacting stream smoothness.
+    ENHANCE_EVERY_N = 0
     DEVICE = 'cuda:0'
 
 
@@ -59,7 +61,7 @@ class FaceSwapPipeline:
         swapped = self.swap.swap_frame(frame)
 
         # Step 2: CodeFormer enhancement (every N frames, if available)
-        if self.enhance is None:
+        if self.enhance is None or self.config.ENHANCE_EVERY_N == 0:
             return swapped
 
         if self._frame_count % self.config.ENHANCE_EVERY_N == 0:
