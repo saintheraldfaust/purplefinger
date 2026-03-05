@@ -31,7 +31,11 @@ class FaceSwapPipeline:
         self.swap = SwapEngine('models/inswapper_128.onnx')
 
         log.info('Initialising EnhanceEngine...')
-        self.enhance = EnhanceEngine('models/codeformer.pth')
+        try:
+            self.enhance = EnhanceEngine('models/codeformer.pth')
+        except Exception as e:
+            log.warning('EnhanceEngine failed to load (%s) — running without enhancement', e)
+            self.enhance = None
 
         self._frame_count = 0
         self._last_enhanced = None
@@ -54,7 +58,10 @@ class FaceSwapPipeline:
         # Step 1: Face swap
         swapped = self.swap.swap_frame(frame)
 
-        # Step 2: CodeFormer enhancement (every N frames)
+        # Step 2: CodeFormer enhancement (every N frames, if available)
+        if self.enhance is None:
+            return swapped
+
         if self._frame_count % self.config.ENHANCE_EVERY_N == 0:
             try:
                 enhanced = self.enhance.enhance(swapped)
