@@ -17,6 +17,57 @@ log = logging.getLogger('chimera.engine')
 
 
 # ---------------------------------------------------------------------------
+# Hair Segmenter — SegFormer face-parsing (jonathandinu/face-parsing)
+# ---------------------------------------------------------------------------
+
+class HairSegmenter:
+    """
+    SegFormer-B2 trained on CelebAMask-HQ.
+    Run ONCE on the source identity image; produces a precise hair-only
+    pixel mask that we warp into the target frame each swap.
+    Class 17 = hair in the face-parsing label set.
+    """
+    HAIR_CLASS = 17
+
+    def __init__(self):
+        import os
+        # Cache on volume so the ~100 MB model survives pod restarts
+        os.environ.setdefault('HF_HOME', '/workspace/.cache/huggingface')
+        os.environ.setdefault('TRANSFORMERS_CACHE', '/workspace/.cache/huggingface')
+
+        from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
+        log.info('Loading face-parsing SegFormer...')
+        model_id = 'jonathandinu/face-parsing'
+        self._proc  = SegformerImageProcessor.from_pretrained(model_id)
+        self._model = SegformerForSemanticSegmentation.from_pretrained(model_id)
+        self._model.eval()
+        self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self._model  = self._model.to(self._device)
+        log.info('HairSegmenter ready on %s', self._device)
+
+    def get_hair_mask(self, image: np.ndarray) -> np.ndarray:
+        """
+        image : BGR uint8 ndarray
+        returns: float32 [0,1] mask, same H×W as image — 1 = hair pixel
+        """
+        import torch.nn.functional as F
+        from PIL import Image
+
+        pil    = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        inputs = self._proc(images=pil, return_tensors='pt')
+        inputs = {k: v.to(self._device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            logits = self._model(**inputs).logits  # (1, C, H/4, W/4)
+
+        upsampled = F.interpolate(
+            logits, size=image.shape[:2], mode='bilinear', align_corners=False
+        )
+        pred = upsampled.argmax(dim=1).squeeze().cpu().numpy()  # H×W int labels
+        return (pred == self.HAIR_CLASS).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
 # Swap Engine — inswapper_128 via insightface
 # ---------------------------------------------------------------------------
 
@@ -52,9 +103,17 @@ class SwapEngine:
         log.info('inswapper providers: %s', self.swapper.session.get_providers())
 
         self._source_face = None  # cached after set_identity()
-        self._source_img  = None  # full source image for beard/hair transfer
+        self._source_img  = None  # full source image for hair transfer
+        self._source_hair_mask = None  # float32 H×W mask, 1=hair (computed once)
         self._cached_target_faces = []   # faces detected in last detection frame
         self._frame_idx = 0
+
+        # Hair segmenter — runs once per identity image, zero per-frame cost
+        try:
+            self._hair_seg = HairSegmenter()
+        except Exception as e:
+            log.warning('HairSegmenter unavailable (%s) — hair transfer disabled', e)
+            self._hair_seg = None
 
     def set_identity(self, image: np.ndarray):
         """Extract and cache the source face embedding from the identity image."""
@@ -65,6 +124,16 @@ class SwapEngine:
         self._source_face = sorted(faces, key=lambda f: f.bbox[2] - f.bbox[0], reverse=True)[0]
         self._source_img  = image.copy()
         log.info('Identity face set (embedding shape: %s)', self._source_face.embedding.shape)
+
+        # Precompute hair mask once — reused every frame via warp
+        if self._hair_seg is not None:
+            try:
+                self._source_hair_mask = self._hair_seg.get_hair_mask(image)
+                hair_px = int(self._source_hair_mask.sum())
+                log.info('Hair mask computed: %d hair pixels', hair_px)
+            except Exception as e:
+                log.warning('Hair mask failed: %s', e)
+                self._source_hair_mask = None
 
     def swap_frame(self, frame: np.ndarray) -> np.ndarray:
         """Swap all detected faces in a frame with the source identity."""
@@ -113,6 +182,64 @@ class SwapEngine:
             result = (
                 swapped.astype(np.float32) * mask_f +
                 result.astype(np.float32) * (1.0 - mask_f)
+            ).astype(np.uint8)
+
+        result = self._apply_hair_transfer(result, h, w)
+        return result
+
+    def _apply_hair_transfer(self, result: np.ndarray, h: int, w: int) -> np.ndarray:
+        """
+        Warp the source identity's hair pixels into the target frame and
+        alpha-blend them on top of the swap result.
+
+        Key points vs the old naive warp:
+          - Only pixels where the source hair MASK is non-zero are blended.
+            The rest of the source image is completely ignored.
+          - BORDER_CONSTANT=0 on the mask warp means out-of-bounds areas
+            never contribute — no black rectangles, no background bleed.
+          - BORDER_REPLICATE on the image warp means edge pixels stretch
+            instead of going black wherever the warp extends past the canvas.
+        """
+        if self._source_hair_mask is None or self._source_img is None:
+            return result
+        src_kps = getattr(self._source_face, 'kps', None)
+        if src_kps is None:
+            return result
+
+        for target_face in self._cached_target_faces:
+            tgt_kps = getattr(target_face, 'kps', None)
+            if tgt_kps is None:
+                continue
+
+            M, _ = cv2.estimateAffinePartial2D(
+                src_kps.astype(np.float32),
+                tgt_kps.astype(np.float32),
+                method=cv2.RANSAC,
+            )
+            if M is None:
+                continue
+
+            # Warp source image — REPLICATE keeps edges, avoids black fill
+            warped_src = cv2.warpAffine(
+                self._source_img, M, (w, h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REPLICATE,
+            )
+            # Warp hair mask — CONSTANT=0 so only real hair pixels are non-zero
+            warped_mask = cv2.warpAffine(
+                self._source_hair_mask, M, (w, h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            )
+
+            # Soft feather so the hair edge blends instead of hard-cuts
+            warped_mask = cv2.GaussianBlur(warped_mask, (11, 11), 2.5)
+            warped_mask = warped_mask[:, :, np.newaxis]
+
+            result = (
+                warped_src.astype(np.float32) * warped_mask +
+                result.astype(np.float32) * (1.0 - warped_mask)
             ).astype(np.uint8)
 
         return result
