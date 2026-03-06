@@ -37,8 +37,8 @@ _fps_frame_count = 0
 _fps_window_start = 0.0
 
 
-# Processing resolution — small enough to be fast, large enough for good detection
-_PROC_W, _PROC_H = 480, 270
+# Processing resolution — match client send size for best landmark detection
+_PROC_W, _PROC_H = 640, 360
 
 
 # --- WebSocket stream handler ---

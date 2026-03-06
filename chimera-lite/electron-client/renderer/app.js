@@ -31,9 +31,9 @@ let captureTimer = null;
 let gpuIp        = null;
 let gpuPort      = null;
 
-// Send at 480x270 — OffscreenCanvas hardware-encodes JPEG much faster than
-// regular canvas.toBlob() at 640x360. Server normalises to its proc size anyway.
-const SEND_W = 480, SEND_H = 270;
+// 640x360 — matches the original WebRTC capture size, gives the detector maximum
+// pixel data for precise landmark alignment (the #1 quality factor).
+const SEND_W = 640, SEND_H = 360;
 
 async function startStreaming(ip, port) {
   gpuIp = ip;
