@@ -73,9 +73,39 @@ class SwapEngine:
         if not self._cached_target_faces:
             return frame
 
+        h, w = frame.shape[:2]
         result = frame.copy()
         for face in self._cached_target_faces:
-            result = self.swapper.get(result, face, self._source_face, paste_back=True)
+            # inswapper paste
+            swapped = self.swapper.get(result, face, self._source_face, paste_back=True)
+
+            # paste_back uses a hard internal mask that leaves a visible edge seam.
+            # Re-blend with a wide Gaussian feather so the transition is invisible.
+            mask = np.zeros((h, w), dtype=np.uint8)
+            lmk = getattr(face, 'landmark_2d_106', None)
+            if lmk is not None:
+                # Points 0-32 trace the full face contour (jaw + temples)
+                contour = lmk[:33].astype(np.int32)
+                cv2.fillPoly(mask, [cv2.convexHull(contour)], 255)
+            else:
+                # Fallback: filled ellipse from detection bbox
+                x1, y1, x2, y2 = face.bbox.astype(int)
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                cv2.ellipse(mask, (cx, cy),
+                            (max(1, (x2 - x1) // 2), max(1, (y2 - y1) // 2)),
+                            0, 0, 360, 255, -1)
+
+            # Wide Gaussian feather — face center is fully swapped,
+            # edges fade softly into the original background
+            mask_f = cv2.GaussianBlur(
+                mask.astype(np.float32) / 255.0, (51, 51), 14.0
+            )[:, :, np.newaxis]
+
+            result = (
+                swapped.astype(np.float32) * mask_f +
+                result.astype(np.float32) * (1.0 - mask_f)
+            ).astype(np.uint8)
+
         return result
 
 

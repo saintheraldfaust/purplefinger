@@ -17,10 +17,10 @@ log = logging.getLogger('chimera.pipeline')
 
 
 class PipelineConfig:
-    # 0 = disabled (real-time mode). CodeFormer at 512px takes 100-300ms/frame
-    # — cripples FPS if enabled every frame. Set to e.g. 30 to run it once per
-    # second at 30fps for a quality boost without impacting stream smoothness.
-    ENHANCE_EVERY_N = 0
+    # CodeFormer runs every N frames. At ~15fps, N=12 fires ~1x per second.
+    # Each CF call takes ~150-300ms (one slow frame), then raw-swap resumes.
+    # The producer/consumer drops stale frames during that window — no stutter.
+    ENHANCE_EVERY_N = 12
     DEVICE = 'cuda:0'
 
 
@@ -66,14 +66,10 @@ class FaceSwapPipeline:
 
         if self._frame_count % self.config.ENHANCE_EVERY_N == 0:
             try:
-                enhanced = self.enhance.enhance(swapped)
-                self._last_enhanced = enhanced
+                swapped = self.enhance.enhance(swapped)
             except Exception as e:
                 log.warning('Enhancement failed: %s', e)
-                self._last_enhanced = swapped
-        else:
-            # Reuse last enhanced frame to maintain FPS
-            if self._last_enhanced is not None and self._last_enhanced.shape == swapped.shape:
-                return self._last_enhanced
 
-        return self._last_enhanced if self._last_enhanced is not None else swapped
+        # Always return current frame — never reuse a stale past frame,
+        # which would show a frozen face composited onto a moving body.
+        return swapped

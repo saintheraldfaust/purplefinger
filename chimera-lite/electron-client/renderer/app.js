@@ -87,7 +87,7 @@ async function startStreaming(ip, port) {
 
       _encodes++;
       offCtx.drawImage(captureVideo, 0, 0, SEND_W, SEND_H);
-      offscreen.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
+      offscreen.convertToBlob({ type: 'image/jpeg', quality: 0.96 })
         .then((blob) => {
           _encodes--;
           if (blob && ws && ws.readyState === WebSocket.OPEN)
