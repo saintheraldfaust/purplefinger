@@ -28,17 +28,20 @@ mkdir -p "$MODELS_DIR" "$PKGS_DIR" "$CODE_DIR"
 export PYTHONPATH="$PKGS_DIR:$PYTHONPATH"
 
 # --- [1/4] Python packages (cached in volume) ---
-# IMPORTANT: torch/torchvision must NEVER be installed into the volume.
-# The base image (pytorch/pytorch:2.1.2-cuda12.1) already has them with the
-# correct compiled .so files for that container. Installing torch into
-# /workspace/site-packages creates broken binaries (missing libtorch_global_deps.so)
-# because the compiled libs are non-portable across container restarts.
-# Always purge any torch that leaked into the volume from old installs.
-echo "[1/4] Purging any torch from volume (must stay in base image)..."
-rm -rf "$PKGS_DIR/torch" "$PKGS_DIR/torchvision" "$PKGS_DIR/torchaudio" \
-       "$PKGS_DIR/torch-"* "$PKGS_DIR/torchvision-"* 2>/dev/null || true
+# IMPORTANT: torch/torchvision/numpy must NEVER be installed into the volume.
+# The base image (pytorch/pytorch:2.1.2-cuda12.1) already has them compiled
+# against each other. Installing numpy into /workspace/site-packages overrides
+# the system numpy, breaking torch's C extensions (_ARRAY_API not found) and
+# causing all compiled modules (insightface, onnxruntime) to fail.
+# Purge on every boot — runs in <1s, unconditional.
+echo "[1/4] Purging compiled base-image packages from volume..."
+rm -rf \
+  "$PKGS_DIR/torch" "$PKGS_DIR/torchvision" "$PKGS_DIR/torchaudio" \
+  "$PKGS_DIR/torch"-*.dist-info "$PKGS_DIR/torchvision"-*.dist-info \
+  "$PKGS_DIR/numpy" "$PKGS_DIR/numpy"-*.dist-info \
+  2>/dev/null || true
 
-MARKER="$WORKSPACE/.packages-installed-v5"
+MARKER="$WORKSPACE/.packages-installed-v6"
 if [ ! -f "$MARKER" ]; then
   # Remove old markers so we don't skip the install on version bumps
   rm -f "$WORKSPACE/.packages-installed-v"* 2>/dev/null || true
@@ -49,7 +52,6 @@ if [ ! -f "$MARKER" ]; then
     aiohttp \
     aiohttp-cors \
     opencv-python-headless \
-    numpy \
     Pillow \
     basicsr \
     facexlib \
