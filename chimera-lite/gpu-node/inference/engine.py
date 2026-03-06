@@ -27,7 +27,7 @@ class SwapEngine:
       - InsightFace buffalo_l       (auto-downloaded on first run to ~/.insightface/)
     """
 
-    DETECT_EVERY_N = 3   # run detection every N frames; 3 = ~5fps detection at 15fps stream
+    DETECT_EVERY_N = 1   # detect every frame — mouth moves too fast for stale landmarks
 
     def __init__(self, model_path: str = 'models/inswapper_128.onnx'):
         import insightface
@@ -64,11 +64,11 @@ class SwapEngine:
 
         self._frame_idx += 1
 
-        # Only run expensive face detection every N frames
-        if self._frame_idx % self.DETECT_EVERY_N == 1 or not self._cached_target_faces:
-            faces = self.app.get(frame)
-            if faces:
-                self._cached_target_faces = faces
+        # Detect every frame — mouth/jaw move too much between frames for
+        # stale landmarks to produce a correct alignment crop.
+        faces = self.app.get(frame)
+        if faces:
+            self._cached_target_faces = faces
 
         if not self._cached_target_faces:
             return frame
@@ -125,7 +125,9 @@ class EnhanceEngine:
     0.5 is the sweet spot for face swap use cases.
     """
 
-    FIDELITY = 0.5
+    # 0.75: preserves 75% of inswapper output (mouth movement, expression)
+    # vs 0.5 which let CF reconstruct too much from its resting-face prior
+    FIDELITY = 0.75
 
     def __init__(self, model_path: str = 'models/codeformer.pth'):
         from basicsr.archs.codeformer_arch import CodeFormer

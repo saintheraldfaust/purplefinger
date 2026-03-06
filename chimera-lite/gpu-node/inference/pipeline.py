@@ -17,10 +17,10 @@ log = logging.getLogger('chimera.pipeline')
 
 
 class PipelineConfig:
-    # CodeFormer runs every N frames. At ~15fps, N=12 fires ~1x per second.
-    # Each CF call takes ~150-300ms (one slow frame), then raw-swap resumes.
-    # The producer/consumer drops stale frames during that window — no stutter.
-    ENHANCE_EVERY_N = 12
+    # CodeFormer fires every N frames. At ~20fps, N=6 = ~3x/sec.
+    # Each CF call is ~150-250ms (one slow frame); producer/consumer drops
+    # stale frames during that window — no visible stutter.
+    ENHANCE_EVERY_N = 6
     DEVICE = 'cuda:0'
 
 
