@@ -37,11 +37,11 @@ export PYTHONPATH="$PKGS_DIR:$PYTHONPATH"
 # numpy is EXCLUDED -- must come from system Python (pre-built against torch).
 # After install we also purge any numpy that snuck in as a transitive dep.
 
-MARKER="$WORKSPACE/.packages-installed-v12"
+MARKER="$WORKSPACE/.packages-installed-v13"
 if [ ! -f "$MARKER" ]; then
   rm -f "$WORKSPACE/.packages-installed-v"* 2>/dev/null || true
   echo "[1/4] Installing Python packages (first time -- cached after this)..."
-  $PIP install --quiet --no-cache-dir --upgrade --target "$PKGS_DIR" \
+  $PIP install --quiet --no-cache-dir --target "$PKGS_DIR" \
     insightface \
     onnxruntime-gpu \
     aiohttp \
@@ -52,16 +52,22 @@ if [ ! -f "$MARKER" ]; then
     facexlib \
     gfpgan \
     realesrgan
-  echo "[1/4] Purging numpy from volume (must use system numpy)..."
+  echo "[1/4] Purging numpy/torch from volume (must use system versions)..."
   rm -rf "$PKGS_DIR"/numpy "$PKGS_DIR"/numpy-*.dist-info 2>/dev/null || true
+  rm -rf "$PKGS_DIR"/torch "$PKGS_DIR"/torch-*.dist-info 2>/dev/null || true
+  rm -rf "$PKGS_DIR"/torchvision "$PKGS_DIR"/torchvision-*.dist-info 2>/dev/null || true
+  rm -rf "$PKGS_DIR"/torchaudio "$PKGS_DIR"/torchaudio-*.dist-info 2>/dev/null || true
   touch "$MARKER"
   echo "[1/4] Packages installed and cached."
 else
   echo "[1/4] Packages already cached -- skipping."
 fi
 
-# Always purge numpy on every boot in case a dep reinstalled it
+# Always purge numpy/torch on every boot in case a dep reinstalled them
 rm -rf "$PKGS_DIR"/numpy "$PKGS_DIR"/numpy-*.dist-info 2>/dev/null || true
+rm -rf "$PKGS_DIR"/torch "$PKGS_DIR"/torch-*.dist-info 2>/dev/null || true
+rm -rf "$PKGS_DIR"/torchvision "$PKGS_DIR"/torchvision-*.dist-info 2>/dev/null || true
+rm -rf "$PKGS_DIR"/torchaudio "$PKGS_DIR"/torchaudio-*.dist-info 2>/dev/null || true
 
 # Fix basicsr compatibility with torchvision >= 0.16
 find "$PKGS_DIR" -path "*/basicsr/data/degradations.py" -exec sed -i \
