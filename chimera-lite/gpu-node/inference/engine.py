@@ -36,7 +36,7 @@ class SwapEngine:
 
         log.info('Loading InsightFace buffalo_l...')
         self.app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        self.app.prepare(ctx_id=0, det_size=(640, 640))  # full detection res = precise landmarks = good swap
+        self.app.prepare(ctx_id=0, det_size=(320, 320))  # 320 is fast enough for webcam faces
 
         log.info('Loading inswapper_128 from %s...', model_path)
         self.swapper = insightface.model_zoo.get_model(
@@ -130,6 +130,7 @@ class EnhanceEngine:
     """
 
     WEIGHT = 0.55  # 0=max GFPGAN reconstruction, 1=preserve inswapper
+    ENHANCE_EVERY_N = 2  # run GFPGAN every N frames to boost FPS; reuse last result in between
 
     def __init__(self, model_path: str = 'models/GFPGANv1.4.pth'):
         from gfpgan import GFPGANer
