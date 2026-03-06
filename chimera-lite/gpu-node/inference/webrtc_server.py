@@ -13,13 +13,8 @@ Endpoints:
 
 import sys
 import os
-import glob
 
-# Ensure volume-installed packages (pip --prefix /workspace/pyprefix) are always found
-for _p in glob.glob('/workspace/pyprefix/lib/python*/site-packages'):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
+# Fallback: add volume pyprefix to path in case bootstrap used --prefix
 import asyncio
 import logging
 import time
