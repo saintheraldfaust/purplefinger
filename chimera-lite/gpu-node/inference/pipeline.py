@@ -9,6 +9,7 @@ GFPGAN runs on each face bbox crop (not full frame) — no pulsing.
 """
 
 import logging
+import time
 import numpy as np
 
 from engine import SwapEngine, EnhanceEngine
@@ -51,16 +52,23 @@ class FaceSwapPipeline:
 
         self._frame_idx += 1
 
-        # Step 1: Face swap (inswapper_128 + feathered blend)
+        t0 = time.perf_counter()
         swapped = self.swap.swap_frame(frame)
+        swap_ms = (time.perf_counter() - t0) * 1000
 
-        # Step 2: GFPGAN every N frames — halves GPU time, barely visible difference
+        enhance_ms = 0
         if self.enhance is not None and self.swap._cached_target_faces:
             if self._frame_idx % self.enhance.ENHANCE_EVERY_N == 0:
+                t1 = time.perf_counter()
                 for face in self.swap._cached_target_faces:
                     try:
                         swapped = self.enhance.enhance(swapped, face, original_frame=frame)
                     except Exception as e:
                         log.warning('Enhance failed: %s', e)
+                enhance_ms = (time.perf_counter() - t1) * 1000
+
+        if self._frame_idx % 30 == 0:
+            log.info('swap=%.0fms  enhance=%.0fms  total=%.0fms',
+                     swap_ms, enhance_ms, swap_ms + enhance_ms)
 
         return swapped

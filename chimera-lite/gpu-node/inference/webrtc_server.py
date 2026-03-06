@@ -46,8 +46,8 @@ _fps_frame_count = 0
 _fps_window_start = 0.0
 
 
-# Processing resolution — match client send size for best landmark detection
-_PROC_W, _PROC_H = 640, 360
+# Processing resolution — lower = faster detection/swap, same quality for webcam faces
+_PROC_W, _PROC_H = 480, 270
 
 
 # --- WebSocket stream handler ---
@@ -81,17 +81,13 @@ async def handle_ws(request):
                 t0 = time.perf_counter()
                 swapped_small = await asyncio.to_thread(pipeline.process_frame, small)
                 frame_ms = (time.perf_counter() - t0) * 1000
+                _, buf = cv2.imencode('.jpg', swapped_small if (w == _PROC_W and h == _PROC_H) else
+                    cv2.resize(swapped_small, (w, h), interpolation=cv2.INTER_LINEAR),
+                    [cv2.IMWRITE_JPEG_QUALITY, 85])
             except Exception as e:
                 log.warning('Frame error: %s', e)
                 continue
 
-            # Return at input resolution so the client canvas scales correctly
-            if w != _PROC_W or h != _PROC_H:
-                swapped = cv2.resize(swapped_small, (w, h), interpolation=cv2.INTER_LINEAR)
-            else:
-                swapped = swapped_small
-
-            _, buf = cv2.imencode('.jpg', swapped, [cv2.IMWRITE_JPEG_QUALITY, 88])
             try:
                 await ws.send_bytes(buf.tobytes())
             except Exception:
