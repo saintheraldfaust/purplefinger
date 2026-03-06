@@ -11,7 +11,7 @@ echo "=== Chimera Lite Bootstrap ==="
 if ! command -v git &>/dev/null || ! command -v wget &>/dev/null; then
   echo "[0/4] Installing system packages..."
   DEBIAN_FRONTEND=noninteractive apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wget git build-essential libgl1 libglib2.0-0
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wget git build-essential libgl1 libglib2.0-0 python3-venv
 else
   echo "[0/4] System packages already present — skipping apt."
 fi
@@ -30,8 +30,8 @@ mkdir -p "$MODELS_DIR" "$CODE_DIR"
 # Our packages (insightface, gfpgan etc.) install into the venv's own tree —
 # no shadowing, no compiled-extension conflicts across restarts.
 
-MARKER="$WORKSPACE/.packages-installed-v9"
-if [ ! -f "$MARKER" ]; then
+MARKER="$WORKSPACE/.packages-installed-v10"
+if [ ! -f "$MARKER" ] || [ ! -f "$VENV_DIR/bin/python" ]; then
   rm -f "$WORKSPACE/.packages-installed-v"* 2>/dev/null || true
   echo "[1/4] Creating Python venv with system site-packages..."
   python3 -m venv --system-site-packages "$VENV_DIR"
