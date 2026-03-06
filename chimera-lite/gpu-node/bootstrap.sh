@@ -24,6 +24,11 @@ if ! python3 -m venv --help &>/dev/null; then
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv
 fi
 
+# RunPod conda images may have 'python' but not 'python3' as a binary.
+# Use --copies so the venv doesn't fail on a missing symlink target.
+PYTHON=$(which python3 2>/dev/null || which python 2>/dev/null)
+echo "[0/4] Using Python: $PYTHON ($(${PYTHON} --version 2>&1))"
+
 WORKSPACE="/workspace"
 MODELS_DIR="$WORKSPACE/models"
 VENV_DIR="$WORKSPACE/venv"
@@ -42,7 +47,7 @@ MARKER="$WORKSPACE/.packages-installed-v10"
 if [ ! -f "$MARKER" ] || [ ! -f "$VENV_DIR/bin/python" ]; then
   rm -f "$WORKSPACE/.packages-installed-v"* 2>/dev/null || true
   echo "[1/4] Creating Python venv with system site-packages..."
-  python3 -m venv --system-site-packages "$VENV_DIR"
+  $PYTHON -m venv --system-site-packages --copies "$VENV_DIR"
   echo "[1/4] Installing Python packages into venv (first time — cached after this)..."
   "$VENV_DIR/bin/pip" install --quiet --upgrade \
     insightface \
