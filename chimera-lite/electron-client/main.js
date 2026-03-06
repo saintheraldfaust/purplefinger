@@ -48,7 +48,12 @@ ipcMain.handle('get-status', async () => {
 });
 
 ipcMain.handle('start-session', async () => {
-  const res = await axios.post(`${BACKEND_URL}/start`, {}, { headers, timeout: 25 * 60 * 1000 });
+  const res = await axios.post(`${BACKEND_URL}/start`, {}, { headers, timeout: 10 * 60 * 1000 });
+  return res.data;
+});
+
+ipcMain.handle('check-ready', async () => {
+  const res = await axios.get(`${BACKEND_URL}/ready`, { headers, timeout: 5000 });
   return res.data;
 });
 

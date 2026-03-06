@@ -48,11 +48,8 @@ app.post('/start', requireToken, async (req, res) => {
     const pod = await startPod();
     const podId = pod.id;
 
-    // Poll until the pod is running and we have a public port
+    // Poll until the pod is running and we have a public port (~1-2 min)
     const endpoint = await pollForEndpoint(podId);
-
-    // Wait for the inference server to finish bootstrapping
-    await waitForInferenceServer(endpoint);
 
     // Safety timeout — kill pod after 3 hours even if client crashes
     const timeoutHandle = setTimeout(async () => {
@@ -61,18 +58,47 @@ app.post('/start', requireToken, async (req, res) => {
       activeSession = null;
     }, config.SESSION_TIMEOUT_MS);
 
-    activeSession = { podId, endpoint, timeoutHandle };
+    activeSession = { podId, endpoint, timeoutHandle, serverReady: false };
 
-    // If a face was uploaded before start, forward it now
-    if (uploadedFaceBuffer) {
-      await forwardFaceToGpu(endpoint, uploadedFaceBuffer).catch(console.error);
-    }
-
+    // Return endpoint immediately — client can show progress while server boots.
+    // Inference server readiness check runs in background.
     res.json({ ok: true, podId, endpoint });
+
+    // Background: wait for inference server then forward face if needed
+    waitForInferenceServer(endpoint)
+      .then(async () => {
+        if (activeSession) activeSession.serverReady = true;
+        console.log('Inference server ready.');
+        if (uploadedFaceBuffer) {
+          await forwardFaceToGpu(endpoint, uploadedFaceBuffer).catch(console.error);
+        }
+      })
+      .catch(err => console.error('Inference server never became ready:', err.message));
+
   } catch (err) {
     console.error('Failed to start pod:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// GET /ready — is the inference server actually accepting connections?
+app.get('/ready', requireToken, async (req, res) => {
+  if (!activeSession) return res.json({ ready: false, reason: 'no_session' });
+  if (activeSession.serverReady) return res.json({ ready: true });
+  // Do a live check in case the background task already finished
+  const url = `http://${activeSession.endpoint.ip}:${activeSession.endpoint.port}/health`;
+  try {
+    const r = await axios.get(url, { timeout: 3000 });
+    if (r.data.ok) {
+      activeSession.serverReady = true;
+      // Forward face now if it was uploaded before server was ready
+      if (uploadedFaceBuffer) {
+        forwardFaceToGpu(activeSession.endpoint, uploadedFaceBuffer).catch(console.error);
+      }
+      return res.json({ ready: true });
+    }
+  } catch (_) {}
+  res.json({ ready: false, reason: 'starting' });
 });
 
 // POST /stop — destroy GPU pod
