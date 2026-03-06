@@ -152,16 +152,37 @@ faceInput.addEventListener('change', async () => {
 // --- Start Session ---
 btnStart.addEventListener('click', async () => {
   setStatus('Starting...', 'loading');
-  setLog('Provisioning GPU — this takes 1-3 minutes...');
+  setLog('Provisioning GPU pod...');
   setLoading(true);
 
   try {
+    // /start returns as soon as the pod has an IP — usually ~1-2 min.
+    // The inference server (pip install + model load) may still be booting.
     const data = await window.chimera.startSession();
-    setStatus('Active', 'active');
+
     btnStart.style.display = 'none';
     btnStop.style.display  = 'block';
     btnStop.disabled       = false;
-    btnUpload.disabled     = false;
+
+    // Poll /ready until the inference server is accepting connections.
+    // Show elapsed time so the user knows it's working, not frozen.
+    const startedAt = Date.now();
+    let dots = 0;
+    while (true) {
+      await new Promise(r => setTimeout(r, 4000));
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      dots = (dots + 1) % 4;
+      const d = '.'.repeat(dots + 1);
+      setLog(`Server starting${d}  ${elapsed}s  (first boot installs packages — ~5-10 min)`);
+      try {
+        const r = await window.chimera.checkReady();
+        if (r.ready) break;
+      } catch (_) {}
+    }
+
+    setStatus('Active', 'active');
+    setLog(`Streaming — ${data.endpoint.ip}:${data.endpoint.port}`);
+    btnUpload.disabled = false;
 
     await startStreaming(data.endpoint.ip, data.endpoint.port);
   } catch (err) {
