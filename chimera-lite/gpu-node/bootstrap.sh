@@ -29,11 +29,9 @@ echo "[0/4] Python: $PYTHON ($($PYTHON --version 2>&1))  pip: $PIP"
 # Volume is used as pip download cache: first boot downloads, every boot after
 # that installs from cached wheels in ~60 sec -- no import path tricks needed.
 echo "[1/4] Installing Python packages..."
-# Nuke volume pip cache — RunPod sets PIP_CACHE_DIR=/workspace/.cache/pip
-# which causes corrupt wheels to persist across pods. Wipe it every boot.
-rm -rf "$WORKSPACE/.cache/pip"
+# Volume cache: first boot downloads (~5 min), subsequent boots install from cache (~60 sec)
 unset PIP_CACHE_DIR
-$PIP install --quiet --no-cache-dir \
+$PIP install --quiet --cache-dir "$WORKSPACE/.cache/pip" \
   insightface \
   onnxruntime-gpu \
   aiohttp \
