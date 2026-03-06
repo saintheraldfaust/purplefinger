@@ -129,7 +129,7 @@ class EnhanceEngine:
     Result: every-frame enhancement at ~15-20fps with no pulsing.
     """
 
-    WEIGHT = 0.3   # 0=max GFPGAN reconstruction, 1=preserve inswapper
+    WEIGHT = 0.55  # 0=max GFPGAN reconstruction, 1=preserve inswapper
 
     def __init__(self, model_path: str = 'models/GFPGANv1.4.pth'):
         from gfpgan import GFPGANer
@@ -210,10 +210,72 @@ class EnhanceEngine:
         mask = cv2.GaussianBlur(mask, (51, 51), 14.0) * valid
         mask = mask[:, :, np.newaxis]
 
-        return (
+        result = (
             restored.astype(np.float32) * mask +
             frame.astype(np.float32) * (1.0 - mask)
         ).astype(np.uint8)
+
+        # Mouth override: GFPGAN hallucinates teeth when reconstructing
+        # inswapper's blurry 128px mouth output.  Replace the inner-mouth
+        # region (between the lips) with a sharpened version of the inswapper
+        # output — correct tooth positions + natural lip angle, no phantoms.
+        result = self._apply_mouth_override(result, frame, kps, h, w)
+        return result
+
+    def _apply_mouth_override(self, gfpgan_result, swap_frame, kps, h, w):
+        """
+        Paste sharpened inswapper output over the inner mouth (teeth/tongue).
+
+        GFPGAN with weight<0.6 tends to invent tooth geometry from scratch
+        because inswapper_128 only captures the mouth at ~30px resolution.
+        For the inner mouth opening we prefer: correct (swap) > sharp (GFPGAN).
+
+        Uses kps[3]/kps[4] (left/right mouth corners, insightface 5-pt model)
+        so it works even when landmark_2d_106 is absent.
+        """
+        if kps is None or len(kps) < 5:
+            return gfpgan_result
+
+        ml = np.asarray(kps[3], dtype=np.float32)
+        mr = np.asarray(kps[4], dtype=np.float32)
+        mouth_w = float(np.linalg.norm(mr - ml))
+        if mouth_w < 4:
+            return gfpgan_result
+
+        cx = (ml[0] + mr[0]) * 0.5
+        cy = (ml[1] + mr[1]) * 0.5
+
+        # Rectangle covering only the inner opening (smaller than full lip area
+        # so the lip edges — where GFPGAN adds real detail — are kept)
+        rx   = mouth_w * 0.36
+        ry_u = mouth_w * 0.20
+        ry_d = mouth_w * 0.24
+        mx1 = max(0, int(round(cx - rx)))
+        mx2 = min(w, int(round(cx + rx)))
+        my1 = max(0, int(round(cy - ry_u)))
+        my2 = min(h, int(round(cy + ry_d)))
+
+        if mx2 - mx1 < 4 or my2 - my1 < 4:
+            return gfpgan_result
+
+        # Unsharp-mask the swap crop to recover edge detail without hallucination
+        swap_crop = swap_frame[my1:my2, mx1:mx2].astype(np.float32)
+        blur = cv2.GaussianBlur(swap_crop, (0, 0), 1.5)
+        sharp = np.clip(swap_crop * 1.5 - blur * 0.5, 0, 255)
+
+        # Soft elliptical mask confined to the crop — no hard seam
+        rh, rw = my2 - my1, mx2 - mx1
+        m = np.zeros((rh, rw), dtype=np.float32)
+        cv2.ellipse(m, (rw // 2, rh // 2), (max(1, rw // 2), max(1, rh // 2)),
+                    0, 0, 360, 1.0, -1)
+        m = cv2.GaussianBlur(m, (7, 7), 2.0)[:, :, np.newaxis]
+
+        gfp_crop = gfpgan_result[my1:my2, mx1:mx2].astype(np.float32)
+        blended = (sharp * m + gfp_crop * (1.0 - m)).astype(np.uint8)
+
+        out = gfpgan_result.copy()
+        out[my1:my2, mx1:mx2] = blended
+        return out
 
     def _crop_enhance(self, frame, face, h, w):
         """Fallback: bbox crop → GFPGAN with detection → paste back."""
