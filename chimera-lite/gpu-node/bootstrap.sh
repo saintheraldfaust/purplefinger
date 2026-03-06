@@ -6,8 +6,15 @@ set -e
 
 echo "=== Chimera Lite Bootstrap ==="
 
-# Ensure basic tools are available (minimal images don't include wget/git)
-DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wget git build-essential libgl1 libglib2.0-0
+# Ensure basic tools are available (minimal images don't include wget/git).
+# Guard with a binary check so same-pod restarts skip the slow apt network round-trip.
+if ! command -v git &>/dev/null || ! python3 -c "import cv2" 2>/dev/null; then
+  echo "[0/4] Installing system packages..."
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wget git build-essential libgl1 libglib2.0-0
+else
+  echo "[0/4] System packages already present — skipping apt."
+fi
 
 WORKSPACE="/workspace"
 MODELS_DIR="$WORKSPACE/models"
@@ -21,13 +28,12 @@ mkdir -p "$MODELS_DIR" "$PKGS_DIR" "$CODE_DIR"
 export PYTHONPATH="$PKGS_DIR:$PYTHONPATH"
 
 # --- [1/4] Python packages (cached in volume) ---
-MARKER="$WORKSPACE/.packages-installed-v3"
+MARKER="$WORKSPACE/.packages-installed-v4"
 if [ ! -f "$MARKER" ]; then
   echo "[1/4] Installing Python packages (first time — cached after this)..."
   pip install --quiet --target "$PKGS_DIR" \
     insightface \
     onnxruntime-gpu \
-    aiortc \
     aiohttp \
     aiohttp-cors \
     opencv-python-headless \
