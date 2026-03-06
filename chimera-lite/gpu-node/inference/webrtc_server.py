@@ -37,65 +37,85 @@ _fps_frame_count = 0
 _fps_window_start = 0.0
 
 
+# Processing resolution — small enough to be fast, large enough for good detection
+_PROC_W, _PROC_H = 480, 270
+
+
 # --- WebSocket stream handler ---
 async def handle_ws(request):
     global _fps_frame_count, _fps_window_start
 
-    ws = web.WebSocketResponse(max_msg_size=10 * 1024 * 1024)
+    ws = web.WebSocketResponse(max_msg_size=5 * 1024 * 1024)
     await ws.prepare(request)
-    log.info('WebSocket client connected from %s', request.remote)
+    log.info('WS connected from %s', request.remote)
 
-    async for msg in ws:
-        if msg.type == WSMsgType.BINARY:
+    # latest[0] always holds the newest unprocessed frame (older ones are dropped)
+    latest = [None]
+
+    async def process_loop():
+        global _fps_frame_count, _fps_window_start
+        while not ws.closed:
+            img = latest[0]
+            if img is None:
+                await asyncio.sleep(0.001)
+                continue
+            latest[0] = None  # consume
+
+            h, w = img.shape[:2]
+            # Always normalise to processing resolution for consistent speed
+            if w != _PROC_W or h != _PROC_H:
+                small = cv2.resize(img, (_PROC_W, _PROC_H), interpolation=cv2.INTER_LINEAR)
+            else:
+                small = img
+
             try:
-                # Decode incoming JPEG
-                arr = np.frombuffer(msg.data, dtype=np.uint8)
-                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if img is None:
-                    continue
-
-                # Downscale to 360p for faster pipeline processing
-                h, w = img.shape[:2]
-                target_h = 360
-                if h > target_h:
-                    scale = target_h / h
-                    small = cv2.resize(img, (int(w * scale), target_h), interpolation=cv2.INTER_LINEAR)
-                else:
-                    small = img
-                    scale = 1.0
-
                 t0 = time.perf_counter()
                 swapped_small = await asyncio.to_thread(pipeline.process_frame, small)
                 frame_ms = (time.perf_counter() - t0) * 1000
-
-                # Scale back to original resolution
-                if scale < 1.0:
-                    swapped = cv2.resize(swapped_small, (w, h), interpolation=cv2.INTER_LINEAR)
-                else:
-                    swapped = swapped_small
-
-                # Encode to JPEG and send back
-                _, buf = cv2.imencode('.jpg', swapped, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                await ws.send_bytes(buf.tobytes())
-
-                # FPS log every 30 frames
-                _fps_frame_count += 1
-                now = time.perf_counter()
-                if _fps_window_start == 0.0:
-                    _fps_window_start = now
-                elif _fps_frame_count % 30 == 0:
-                    fps = 30.0 / max(now - _fps_window_start, 1e-6)
-                    log.info('Pipeline  FPS=%.1f  last_frame=%.0fms', fps, frame_ms)
-                    _fps_window_start = now
-
             except Exception as e:
                 log.warning('Frame error: %s', e)
+                continue
 
-        elif msg.type == WSMsgType.ERROR:
-            log.error('WebSocket error: %s', ws.exception())
-            break
+            # Return at input resolution so the client canvas scales correctly
+            if w != _PROC_W or h != _PROC_H:
+                swapped = cv2.resize(swapped_small, (w, h), interpolation=cv2.INTER_LINEAR)
+            else:
+                swapped = swapped_small
 
-    log.info('WebSocket client disconnected')
+            _, buf = cv2.imencode('.jpg', swapped, [cv2.IMWRITE_JPEG_QUALITY, 88])
+            try:
+                await ws.send_bytes(buf.tobytes())
+            except Exception:
+                break
+
+            _fps_frame_count += 1
+            now = time.perf_counter()
+            if _fps_window_start == 0.0:
+                _fps_window_start = now
+            elif _fps_frame_count % 30 == 0:
+                fps = 30.0 / max(now - _fps_window_start, 1e-6)
+                log.info('Pipeline  FPS=%.1f  last_frame=%.0fms', fps, frame_ms)
+                _fps_window_start = now
+
+    proc_task = asyncio.create_task(process_loop())
+    try:
+        async for msg in ws:
+            if msg.type == WSMsgType.BINARY:
+                arr = np.frombuffer(msg.data, dtype=np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if img is not None:
+                    latest[0] = img  # always replace — stale frames are dropped
+            elif msg.type == WSMsgType.ERROR:
+                log.error('WS error: %s', ws.exception())
+                break
+    finally:
+        proc_task.cancel()
+        try:
+            await proc_task
+        except asyncio.CancelledError:
+            pass
+
+    log.info('WS client disconnected')
     return ws
 
 
