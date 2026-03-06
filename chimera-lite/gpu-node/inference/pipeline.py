@@ -2,10 +2,10 @@
 Chimera Lite v1.1 — Face Swap Pipeline
 
 Per-frame flow:
-  inswapper_128 swap → CodeFormer enhancement → output frame
+  inswapper_128 swap → GFPGAN crop enhancement (every frame) → output
 
-insightface handles detection, alignment, and swap internally,
-so we no longer need separate bbox/landmark/blend logic.
+insightface handles detection, alignment, and swap internally.
+GFPGAN runs on each face bbox crop (not full frame) — no pulsing.
 """
 
 import logging
@@ -17,9 +17,6 @@ log = logging.getLogger('chimera.pipeline')
 
 
 class PipelineConfig:
-    # GFPGAN runs every N frames. At ~20fps, N=4 = 5x/sec.
-    # ~100-150ms per call on RTX 3090; producer/consumer drops stale frames.
-    ENHANCE_EVERY_N = 4
     DEVICE = 'cuda:0'
 
 
@@ -31,14 +28,12 @@ class FaceSwapPipeline:
         log.info('Initialising SwapEngine...')
         self.swap = SwapEngine('models/inswapper_128.onnx')
 
-        log.info('Initialising EnhanceEngine (GFPGAN)...')
+        log.info('Initialising EnhanceEngine (GFPGAN crop)...')
         try:
             self.enhance = EnhanceEngine('models/GFPGANv1.4.pth')
         except Exception as e:
             log.warning('EnhanceEngine failed to load (%s) — running without enhancement', e)
             self.enhance = None
-
-        self._frame_count = 0
 
     @property
     def ready(self) -> bool:
@@ -53,18 +48,17 @@ class FaceSwapPipeline:
         if not self.ready:
             return frame
 
-        self._frame_count += 1
-
-        # Step 1: Face swap (inswapper_128)
+        # Step 1: Face swap (inswapper_128 + feathered blend)
         swapped = self.swap.swap_frame(frame)
 
-        # Step 2: GFPGAN enhancement every N frames
-        # Fixes teeth, open mouth, tongue, skin texture at 512px.
-        if self.enhance is not None and self.config.ENHANCE_EVERY_N > 0:
-            if self._frame_count % self.config.ENHANCE_EVERY_N == 0:
+        # Step 2: GFPGAN enhancement on face crop every frame.
+        # Running every frame (not every N) is what eliminates pulsing.
+        # Crop approach is fast enough: ~80-100ms vs 150-180ms for full frame.
+        if self.enhance is not None and self.swap._cached_target_faces:
+            for face in self.swap._cached_target_faces:
                 try:
-                    swapped = self.enhance.enhance(swapped)
+                    swapped = self.enhance.enhance(swapped, face)
                 except Exception as e:
-                    log.warning('Enhancement failed: %s', e)
+                    log.warning('Enhance failed: %s', e)
 
         return swapped

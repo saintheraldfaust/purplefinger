@@ -110,21 +110,26 @@ class SwapEngine:
 
 
 # ---------------------------------------------------------------------------
-# Enhance Engine — GFPGAN v1.4 full-face restoration
+# Enhance Engine — GFPGAN v1.4, crop-per-face approach (DeepLiveCam method)
 # ---------------------------------------------------------------------------
 
 class EnhanceEngine:
     """
-    GFPGAN v1.4 face restoration.
-    Processes faces at 512×512 internally — handles teeth, tongue, open mouth,
-    skin texture, and sharp edges far better than inswapper's 128×128 output.
+    GFPGAN v1.4 applied to each face crop individually.
 
-    weight: 0.0 = max GFPGAN reconstruction, 1.0 = preserve inswapper output.
-    0.5 = balanced: keeps identity/expression from inswapper, GFPGAN fixes
-    texture, teeth, and mouth-open detail.
+    Why crop instead of full frame:
+      - Full frame: GFPGAN detects + processes ALL faces, ~150-180ms
+      - Crop: tiny input, GFPGAN finds one face quickly, ~80-100ms
+      - Run every frame — no N-frame skip, so no pulsing
+
+    weight 0.5: preserve inswapper identity/expression while GFPGAN
+    reconstructs mouth-open shape, teeth, tongue, skin texture at 512px.
     """
 
     WEIGHT = 0.5
+    # Padding around the detected bbox — 50% gives GFPGAN enough
+    # background context so its internal paste_back blends cleanly.
+    BBOX_PAD = 0.6
 
     def __init__(self, model_path: str = 'models/GFPGANv1.4.pth'):
         from gfpgan import GFPGANer
@@ -132,23 +137,49 @@ class EnhanceEngine:
         log.info('Loading GFPGAN v1.4 from %s...', model_path)
         self.gfpgan = GFPGANer(
             model_path=model_path,
-            upscale=1,              # keep original resolution
+            upscale=1,
             arch='clean',
             channel_multiplier=2,
             bg_upsampler=None,
         )
         log.info('GFPGAN ready.')
 
-    def enhance(self, frame: np.ndarray) -> np.ndarray:
+    def enhance(self, frame: np.ndarray, face) -> np.ndarray:
+        """
+        Crop the face region, run GFPGAN on the crop, paste back.
+        face: insightface face object with .bbox attribute.
+        """
         try:
-            _, _, output = self.gfpgan.enhance(
-                frame,
+            h, w = frame.shape[:2]
+            x1, y1, x2, y2 = face.bbox.astype(int)
+            fw, fh = x2 - x1, y2 - y1
+            pad_x = int(fw * self.BBOX_PAD)
+            pad_y = int(fh * self.BBOX_PAD)
+
+            cx1 = max(0, x1 - pad_x)
+            cy1 = max(0, y1 - pad_y)
+            cx2 = min(w, x2 + pad_x)
+            cy2 = min(h, y2 + pad_y)
+
+            crop = frame[cy1:cy2, cx1:cx2].copy()
+            if crop.size == 0:
+                return frame
+
+            _, _, enhanced = self.gfpgan.enhance(
+                crop,
                 has_aligned=False,
-                only_center_face=False,
+                only_center_face=True,  # one face per crop — faster, more accurate
                 paste_back=True,
                 weight=self.WEIGHT,
             )
-            return output if output is not None and output.size > 0 else frame
+
+            if enhanced is None or enhanced.size == 0:
+                return frame
+
+            result = frame.copy()
+            result[cy1:cy2, cx1:cx2] = enhanced
+            return result
+
         except Exception as e:
             log.warning('GFPGAN enhance failed: %s', e)
             return frame
