@@ -30,7 +30,7 @@ mkdir -p "$MODELS_DIR" "$CODE_DIR"
 # Our packages (insightface, gfpgan etc.) install into the venv's own tree —
 # no shadowing, no compiled-extension conflicts across restarts.
 
-MARKER="$WORKSPACE/.packages-installed-v8"
+MARKER="$WORKSPACE/.packages-installed-v9"
 if [ ! -f "$MARKER" ]; then
   rm -f "$WORKSPACE/.packages-installed-v"* 2>/dev/null || true
   echo "[1/4] Creating Python venv with system site-packages..."
@@ -38,7 +38,7 @@ if [ ! -f "$MARKER" ]; then
   echo "[1/4] Installing Python packages into venv (first time — cached after this)..."
   "$VENV_DIR/bin/pip" install --quiet --upgrade \
     insightface \
-    "onnxruntime-gpu==1.17.1" \
+    onnxruntime-gpu \
     aiohttp \
     aiohttp-cors \
     opencv-python-headless \
