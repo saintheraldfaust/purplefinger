@@ -30,7 +30,7 @@ mkdir -p "$MODELS_DIR" "$CODE_DIR"
 # Our packages (insightface, gfpgan etc.) install into the venv's own tree —
 # no shadowing, no compiled-extension conflicts across restarts.
 
-MARKER="$WORKSPACE/.packages-installed-v7"
+MARKER="$WORKSPACE/.packages-installed-v8"
 if [ ! -f "$MARKER" ]; then
   rm -f "$WORKSPACE/.packages-installed-v"* 2>/dev/null || true
   echo "[1/4] Creating Python venv with system site-packages..."
@@ -38,7 +38,7 @@ if [ ! -f "$MARKER" ]; then
   echo "[1/4] Installing Python packages into venv (first time — cached after this)..."
   "$VENV_DIR/bin/pip" install --quiet --upgrade \
     insightface \
-    onnxruntime-gpu \
+    "onnxruntime-gpu==1.17.3" \
     aiohttp \
     aiohttp-cors \
     opencv-python-headless \
@@ -47,6 +47,10 @@ if [ ! -f "$MARKER" ]; then
     facexlib \
     gfpgan \
     realesrgan
+  # Purge numpy from venv — basicsr/gfpgan pull it in as a dep but it must
+  # come from the base image (compiled against system torch). Venv numpy
+  # overrides system numpy and breaks torch's C extensions.
+  rm -rf "$VENV_DIR"/lib/python*/site-packages/numpy* 2>/dev/null || true
   touch "$MARKER"
   echo "[1/4] Packages installed and cached."
 else
