@@ -13,11 +13,12 @@ Endpoints:
 
 import sys
 import os
+import glob
 
-# Ensure volume-installed packages are always found regardless of PYTHONPATH
-_vol_pkgs = '/workspace/site-packages'
-if os.path.isdir(_vol_pkgs) and _vol_pkgs not in sys.path:
-    sys.path.insert(0, _vol_pkgs)
+# Ensure volume-installed packages (pip --prefix /workspace/pyprefix) are always found
+for _p in glob.glob('/workspace/pyprefix/lib/python*/site-packages'):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import asyncio
 import logging
