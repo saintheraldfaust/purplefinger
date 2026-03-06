@@ -29,6 +29,8 @@ echo "[0/4] Python: $PYTHON ($($PYTHON --version 2>&1))  pip: $PIP"
 # Volume is used as pip download cache: first boot downloads, every boot after
 # that installs from cached wheels in ~60 sec -- no import path tricks needed.
 echo "[1/4] Installing Python packages (from volume cache after first run)..."
+# Purge any corrupt cached wheels (insightface wheel was corrupted in earlier runs)
+find "$WORKSPACE/.cache/pip/wheels" -name "insightface-*.whl" -delete 2>/dev/null || true
 $PIP install --quiet --cache-dir "$WORKSPACE/.cache/pip" \
   insightface \
   onnxruntime-gpu \
