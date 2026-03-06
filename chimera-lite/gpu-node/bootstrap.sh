@@ -43,7 +43,7 @@ if [ ! -f "$MARKER" ]; then
   # Remove old markers so we don't skip the install on version bumps
   rm -f "$WORKSPACE/.packages-installed-v"* 2>/dev/null || true
   echo "[1/4] Installing Python packages (first time — cached after this)..."
-  pip install --quiet --target "$PKGS_DIR" \
+  pip install --quiet --upgrade --target "$PKGS_DIR" \
     insightface \
     onnxruntime-gpu \
     aiohttp \
