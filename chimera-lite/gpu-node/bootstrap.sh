@@ -29,8 +29,8 @@ echo "[0/4] Python: $PYTHON ($($PYTHON --version 2>&1))  pip: $PIP"
 # Volume is used as pip download cache: first boot downloads, every boot after
 # that installs from cached wheels in ~60 sec -- no import path tricks needed.
 echo "[1/4] Installing Python packages..."
-# --no-cache-dir: always download fresh, never use potentially corrupt cached wheels
-$PIP install --quiet --no-cache-dir \
+# Volume cache means wheels are downloaded once, installed from disk every boot (~60 sec)
+$PIP install --quiet --no-cache-dir --cache-dir "$WORKSPACE/.cache/pip" \
   insightface \
   onnxruntime-gpu \
   aiohttp \
