@@ -31,6 +31,13 @@ from pipeline import FaceSwapPipeline, PipelineConfig
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('chimera')
 
+# --- GPU check ---
+import torch
+if torch.cuda.is_available():
+    log.info('CUDA available: %s (device 0: %s)', torch.version.cuda, torch.cuda.get_device_name(0))
+else:
+    log.warning('CUDA NOT available — running on CPU, expect slow performance')
+
 # --- Global state ---
 pipeline = FaceSwapPipeline(PipelineConfig())
 
