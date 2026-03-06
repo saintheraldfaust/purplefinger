@@ -16,6 +16,14 @@ else
   echo "[0/4] System packages already present — skipping apt."
 fi
 
+# python3-venv must be checked separately — it's not included in the RunPod
+# PyTorch image even when git/wget are present.
+if ! python3 -m venv --help &>/dev/null; then
+  echo "[0/4] Installing python3-venv..."
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv
+fi
+
 WORKSPACE="/workspace"
 MODELS_DIR="$WORKSPACE/models"
 VENV_DIR="$WORKSPACE/venv"
