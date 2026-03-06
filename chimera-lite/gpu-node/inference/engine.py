@@ -137,7 +137,7 @@ class EnhanceEngine:
     """
 
     WEIGHT = 0.55  # 0=max GFPGAN reconstruction, 1=preserve inswapper
-    ENHANCE_EVERY_N = 3  # run GFPGAN every N frames; reuse last result in between
+    ENHANCE_EVERY_N = 4  # run GFPGAN every N frames; reuse last result in between
 
     def __init__(self, model_path: str = 'models/GFPGANv1.4.pth'):
         from gfpgan import GFPGANer
@@ -152,6 +152,13 @@ class EnhanceEngine:
             bg_upsampler=None,
             device=device,
         )
+        # fp16 on GPU: RTX tensor cores are 2x faster at half precision
+        if device == 'cuda' and hasattr(self.gfpgan, 'gfpgan'):
+            self.gfpgan.gfpgan = self.gfpgan.gfpgan.half()
+            self._fp16 = True
+            log.info('GFPGAN fp16 enabled.')
+        else:
+            self._fp16 = False
         log.info('GFPGAN ready on %s.', device)
 
     def enhance(self, frame: np.ndarray, face, original_frame: np.ndarray = None) -> np.ndarray:
@@ -195,9 +202,11 @@ class EnhanceEngine:
             paste_back=True,
             weight=self.WEIGHT,
         )
-
         if enhanced is None or enhanced.size == 0:
             return frame
+        # fp16 output comes back as float16 ndarray — convert back to uint8
+        if enhanced.dtype != np.uint8:
+            enhanced = np.clip(enhanced, 0, 255).astype(np.uint8)
 
         # Warp enhanced face back to original frame coordinates
         M_inv = cv2.invertAffineTransform(M)
