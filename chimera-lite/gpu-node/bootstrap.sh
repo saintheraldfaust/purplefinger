@@ -21,7 +21,7 @@ mkdir -p "$MODELS_DIR" "$PKGS_DIR" "$CODE_DIR"
 export PYTHONPATH="$PKGS_DIR:$PYTHONPATH"
 
 # --- [1/4] Python packages (cached in volume) ---
-MARKER="$WORKSPACE/.packages-installed-v2"
+MARKER="$WORKSPACE/.packages-installed-v3"
 if [ ! -f "$MARKER" ]; then
   echo "[1/4] Installing Python packages (first time — cached after this)..."
   pip install --quiet --target "$PKGS_DIR" \
@@ -35,7 +35,8 @@ if [ ! -f "$MARKER" ]; then
     Pillow \
     basicsr \
     facexlib \
-    gfpgan
+    gfpgan \
+    realesrgan
   touch "$MARKER"
   echo "[1/4] Packages installed and cached."
 else
@@ -70,6 +71,12 @@ if [ ! -f "$MODELS_DIR/codeformer.pth" ]; then
   echo "[3/4] Downloading CodeFormer weights (~500MB)..."
   wget -q --show-progress -O "$MODELS_DIR/codeformer.pth" \
     "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/codeformer.pth"
+fi
+
+if [ ! -f "$MODELS_DIR/GFPGANv1.4.pth" ]; then
+  echo "[3/4] Downloading GFPGANv1.4.pth (~350MB)..."
+  wget -q --show-progress -O "$MODELS_DIR/GFPGANv1.4.pth" \
+    "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth"
 fi
 
 if [ ! -f "$MODELS_DIR/inswapper_128.onnx" ]; then
