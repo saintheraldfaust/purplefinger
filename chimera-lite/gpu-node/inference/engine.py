@@ -27,7 +27,7 @@ class SwapEngine:
       - InsightFace buffalo_l       (auto-downloaded on first run to ~/.insightface/)
     """
 
-    DETECT_EVERY_N = 5   # run face detection every N frames, reuse cached faces between
+    DETECT_EVERY_N = 3   # run detection every N frames; 3 = ~5fps detection at 15fps stream
 
     def __init__(self, model_path: str = 'models/inswapper_128.onnx'):
         import insightface
@@ -36,7 +36,7 @@ class SwapEngine:
 
         log.info('Loading InsightFace buffalo_l...')
         self.app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        self.app.prepare(ctx_id=0, det_size=(256, 256))   # smaller det size = faster detection
+        self.app.prepare(ctx_id=0, det_size=(640, 640))  # full detection res = precise landmarks = good swap
 
         log.info('Loading inswapper_128 from %s...', model_path)
         self.swapper = insightface.model_zoo.get_model(
