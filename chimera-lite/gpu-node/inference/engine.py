@@ -144,13 +144,13 @@ class EnhanceEngine:
         )
         log.info('GFPGAN ready.')
 
-    def enhance(self, frame: np.ndarray, face) -> np.ndarray:
+    def enhance(self, frame: np.ndarray, face, original_frame: np.ndarray = None) -> np.ndarray:
         try:
             h, w = frame.shape[:2]
             kps = getattr(face, 'kps', None)
 
             if kps is not None:
-                return self._aligned_enhance(frame, face, kps, h, w)
+                return self._aligned_enhance(frame, face, kps, h, w, original_frame)
             else:
                 return self._crop_enhance(frame, face, h, w)
 
@@ -158,7 +158,7 @@ class EnhanceEngine:
             log.warning('GFPGAN enhance failed: %s', e)
             return frame
 
-    def _aligned_enhance(self, frame, face, kps, h, w):
+    def _aligned_enhance(self, frame, face, kps, h, w, original_frame=None):
         """Fast path: pre-align → GFPGAN(has_aligned=True) → inverse warp."""
         from insightface.utils.face_align import estimate_norm
 
@@ -215,23 +215,21 @@ class EnhanceEngine:
             frame.astype(np.float32) * (1.0 - mask)
         ).astype(np.uint8)
 
-        # Mouth override: GFPGAN hallucinates teeth when reconstructing
-        # inswapper's blurry 128px mouth output.  Replace the inner-mouth
-        # region (between the lips) with a sharpened version of the inswapper
-        # output — correct tooth positions + natural lip angle, no phantoms.
-        result = self._apply_mouth_override(result, frame, kps, h, w)
+        # Mouth override: use real camera mouth for inner region.
+        # Real mouth = correct lip sync, correct teeth positions, no hallucination.
+        result = self._apply_mouth_override(result, original_frame if original_frame is not None else frame, kps, h, w)
         return result
 
-    def _apply_mouth_override(self, gfpgan_result, swap_frame, kps, h, w):
+    def _apply_mouth_override(self, gfpgan_result, source_frame, kps, h, w):
         """
-        Paste sharpened inswapper output over the inner mouth (teeth/tongue).
+        Paste the real camera mouth over the inner mouth region.
 
-        GFPGAN with weight<0.6 tends to invent tooth geometry from scratch
-        because inswapper_128 only captures the mouth at ~30px resolution.
-        For the inner mouth opening we prefer: correct (swap) > sharp (GFPGAN).
+        source_frame is the original pre-swap camera frame — real lips,
+        real teeth, real tongue, perfectly lip-synced by definition.
+        No hallucinated geometry, no phantom teeth from GFPGAN.
 
-        Uses kps[3]/kps[4] (left/right mouth corners, insightface 5-pt model)
-        so it works even when landmark_2d_106 is absent.
+        GFPGAN output is kept for: skin, eyes, nose, outer lip edges.
+        Inner mouth (teeth/tongue opening) = real camera.
         """
         if kps is None or len(kps) < 5:
             return gfpgan_result
@@ -258,10 +256,8 @@ class EnhanceEngine:
         if mx2 - mx1 < 4 or my2 - my1 < 4:
             return gfpgan_result
 
-        # Unsharp-mask the swap crop to recover edge detail without hallucination
-        swap_crop = swap_frame[my1:my2, mx1:mx2].astype(np.float32)
-        blur = cv2.GaussianBlur(swap_crop, (0, 0), 1.5)
-        sharp = np.clip(swap_crop * 1.5 - blur * 0.5, 0, 255)
+        # Real camera mouth — already sharp, already correct
+        real_crop = source_frame[my1:my2, mx1:mx2].astype(np.float32)
 
         # Soft elliptical mask confined to the crop — no hard seam
         rh, rw = my2 - my1, mx2 - mx1
@@ -271,7 +267,7 @@ class EnhanceEngine:
         m = cv2.GaussianBlur(m, (7, 7), 2.0)[:, :, np.newaxis]
 
         gfp_crop = gfpgan_result[my1:my2, mx1:mx2].astype(np.float32)
-        blended = (sharp * m + gfp_crop * (1.0 - m)).astype(np.uint8)
+        blended = (real_crop * m + gfp_crop * (1.0 - m)).astype(np.uint8)
 
         out = gfpgan_result.copy()
         out[my1:my2, mx1:mx2] = blended
