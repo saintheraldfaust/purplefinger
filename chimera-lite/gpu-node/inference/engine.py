@@ -52,6 +52,7 @@ class SwapEngine:
         log.info('inswapper providers: %s', self.swapper.session.get_providers())
 
         self._source_face = None  # cached after set_identity()
+        self._source_img  = None  # full source image for beard/hair transfer
         self._cached_target_faces = []   # faces detected in last detection frame
         self._frame_idx = 0
 
@@ -62,6 +63,7 @@ class SwapEngine:
             raise ValueError('No face detected in identity image')
         # Use the largest face
         self._source_face = sorted(faces, key=lambda f: f.bbox[2] - f.bbox[0], reverse=True)[0]
+        self._source_img  = image.copy()
         log.info('Identity face set (embedding shape: %s)', self._source_face.embedding.shape)
 
     def swap_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -111,6 +113,75 @@ class SwapEngine:
             result = (
                 swapped.astype(np.float32) * mask_f +
                 result.astype(np.float32) * (1.0 - mask_f)
+            ).astype(np.uint8)
+
+        # Transfer beard / hair from source identity
+        result = self._transfer_outer_features(result, h, w)
+        return result
+
+    def _transfer_outer_features(self, result: np.ndarray, h: int, w: int) -> np.ndarray:
+        """
+        Warp the source identity image into the target frame and blend the
+        beard (below jaw) and hair (above forehead) regions.
+        The face interior is excluded so it never overwrites the swap.
+        """
+        if self._source_img is None or not self._cached_target_faces:
+            return result
+
+        src_kps = getattr(self._source_face, 'kps', None)
+        if src_kps is None:
+            return result
+
+        for target_face in self._cached_target_faces:
+            tgt_kps = getattr(target_face, 'kps', None)
+            if tgt_kps is None:
+                continue
+
+            # Affine from source face space → target frame space (5-point kps)
+            M, _ = cv2.estimateAffinePartial2D(
+                src_kps.astype(np.float32),
+                tgt_kps.astype(np.float32),
+                method=cv2.RANSAC,
+            )
+            if M is None:
+                continue
+
+            warped = cv2.warpAffine(self._source_img, M, (w, h), flags=cv2.INTER_LINEAR)
+
+            x1, y1, x2, y2 = target_face.bbox.astype(int)
+            face_h = max(y2 - y1, 1)
+            face_w = max(x2 - x1, 1)
+
+            outer = np.zeros((h, w), np.float32)
+
+            # Beard zone: from 10% above jaw bottom to 50% face-height below it
+            by1 = max(0, y2 - int(face_h * 0.10))
+            by2 = min(h, y2 + int(face_h * 0.50))
+            bx1 = max(0, x1 - int(face_w * 0.10))
+            bx2 = min(w, x2 + int(face_w * 0.10))
+            outer[by1:by2, bx1:bx2] = 1.0
+
+            # Hair zone: from 60% face-height above forehead to 10% below it
+            hy1 = max(0, y1 - int(face_h * 0.60))
+            hy2 = min(h, y1 + int(face_h * 0.10))
+            hx1 = max(0, x1 - int(face_w * 0.20))
+            hx2 = min(w, x2 + int(face_w * 0.20))
+            outer[hy1:hy2, hx1:hx2] = 1.0
+
+            # Cut out the inner face so the swap result shows through
+            face_interior = np.zeros((h, w), np.float32)
+            lmk = getattr(target_face, 'landmark_2d_106', None)
+            if lmk is not None:
+                cv2.fillPoly(face_interior,
+                             [cv2.convexHull(lmk[:33].astype(np.int32))], 1.0)
+            else:
+                face_interior[y1:y2, x1:x2] = 1.0
+            outer = np.clip(outer - face_interior, 0.0, 1.0)
+
+            outer = cv2.GaussianBlur(outer, (41, 41), 12.0)[:, :, np.newaxis]
+            result = (
+                warped.astype(np.float32) * outer +
+                result.astype(np.float32) * (1.0 - outer)
             ).astype(np.uint8)
 
         return result
