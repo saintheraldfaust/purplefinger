@@ -31,9 +31,8 @@ let captureTimer = null;
 let gpuIp        = null;
 let gpuPort      = null;
 
-// 640x360 — matches the original WebRTC capture size, gives the detector maximum
-// pixel data for precise landmark alignment (the #1 quality factor).
-const SEND_W = 640, SEND_H = 360;
+// 480x270 — fast to encode and upload; GPU detects faces fine at this resolution
+const SEND_W = 480, SEND_H = 270;
 
 async function startStreaming(ip, port) {
   gpuIp = ip;
@@ -87,7 +86,7 @@ async function startStreaming(ip, port) {
 
       _encodes++;
       offCtx.drawImage(captureVideo, 0, 0, SEND_W, SEND_H);
-      offscreen.convertToBlob({ type: 'image/jpeg', quality: 0.96 })
+      offscreen.convertToBlob({ type: 'image/jpeg', quality: 0.7 })
         .then((blob) => {
           _encodes--;
           if (blob && ws && ws.readyState === WebSocket.OPEN)
