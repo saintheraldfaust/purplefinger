@@ -38,7 +38,7 @@ if [ ! -f "$MARKER" ]; then
   echo "[1/4] Installing Python packages into venv (first time — cached after this)..."
   "$VENV_DIR/bin/pip" install --quiet --upgrade \
     insightface \
-    "onnxruntime-gpu==1.17.3" \
+    "onnxruntime-gpu==1.17.1" \
     aiohttp \
     aiohttp-cors \
     opencv-python-headless \
