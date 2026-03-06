@@ -164,8 +164,15 @@ class EnhanceEngine:
 
         # Get the 2×3 affine matrix that maps face to 512×512 aligned crop.
         # estimate_norm uses insightface's built-in ArcFace reference points.
-        M, _ = estimate_norm(kps, 512, mode='arcface')
+        # NOTE: older insightface returns just M; newer returns (M, pose_index).
+        # Handle both so the code doesn't silently unpack rows as scalars.
+        _result = estimate_norm(kps, 512, mode='arcface')
+        M = _result[0] if isinstance(_result, tuple) else _result
         if M is None:
+            return self._crop_enhance(frame, face, h, w)
+        # Ensure contiguous float32 with correct shape (2×3) before warpAffine
+        M = np.asarray(M, dtype=np.float32)
+        if M.shape != (2, 3):
             return self._crop_enhance(frame, face, h, w)
 
         aligned = cv2.warpAffine(frame, M, (512, 512), flags=cv2.INTER_LINEAR)
