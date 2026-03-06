@@ -9,6 +9,10 @@ const headers = () => ({
 });
 
 async function startPod() {
+  const networkVolumeField = config.RUNPOD_NETWORK_VOLUME_ID
+    ? `networkVolumeId: "${config.RUNPOD_NETWORK_VOLUME_ID}",`
+    : '';
+
   const mutation = `
     mutation {
       podFindAndDeployOnDemand(input: {
@@ -20,6 +24,7 @@ async function startPod() {
         gpuTypeId: "${config.RUNPOD_GPU_TYPE}",
         name: "chimera-lite-session",
         templateId: "${config.RUNPOD_TEMPLATE_ID}",
+        ${networkVolumeField}
         startSsh: true,
         ports: "8765/tcp",
         cloudType: ALL
