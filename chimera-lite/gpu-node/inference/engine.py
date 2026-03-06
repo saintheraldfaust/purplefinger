@@ -152,13 +152,10 @@ class EnhanceEngine:
             bg_upsampler=None,
             device=device,
         )
-        # fp16 on GPU: RTX tensor cores are 2x faster at half precision
-        if device == 'cuda' and hasattr(self.gfpgan, 'gfpgan'):
-            self.gfpgan.gfpgan = self.gfpgan.gfpgan.half()
-            self._fp16 = True
-            log.info('GFPGAN fp16 enabled.')
-        else:
-            self._fp16 = False
+        # fp16 via autocast: inputs stay float32, ops run in fp16 automatically
+        self._device = device
+        if device == 'cuda':
+            log.info('GFPGAN will use torch.autocast fp16.')
         log.info('GFPGAN ready on %s.', device)
 
     def enhance(self, frame: np.ndarray, face, original_frame: np.ndarray = None) -> np.ndarray:
@@ -195,16 +192,16 @@ class EnhanceEngine:
         aligned = cv2.warpAffine(frame, M, (512, 512), flags=cv2.INTER_LINEAR)
 
         # has_aligned=True skips RetinaFace — the main cost saving
-        _, _, enhanced = self.gfpgan.enhance(
-            aligned,
-            has_aligned=True,
-            only_center_face=True,
-            paste_back=True,
-            weight=self.WEIGHT,
-        )
+        with torch.autocast(device_type='cuda', enabled=(self._device == 'cuda')):
+            _, _, enhanced = self.gfpgan.enhance(
+                aligned,
+                has_aligned=True,
+                only_center_face=True,
+                paste_back=True,
+                weight=self.WEIGHT,
+            )
         if enhanced is None or enhanced.size == 0:
             return frame
-        # fp16 output comes back as float16 ndarray — convert back to uint8
         if enhanced.dtype != np.uint8:
             enhanced = np.clip(enhanced, 0, 255).astype(np.uint8)
 
