@@ -57,7 +57,7 @@ class FaceSwapPipeline:
         if self.enhance is not None and self.swap._cached_target_faces:
             for face in self.swap._cached_target_faces:
                 try:
-                    swapped = self.enhance.enhance(swapped, face)
+                    swapped = self.enhance.enhance(swapped, face, original_frame=frame)
                 except Exception as e:
                     log.warning('Enhance failed: %s', e)
 
