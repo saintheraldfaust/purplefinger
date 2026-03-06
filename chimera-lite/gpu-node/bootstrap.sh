@@ -24,10 +24,11 @@ if ! python3 -m venv --help &>/dev/null; then
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv
 fi
 
-# RunPod conda images may have 'python' but not 'python3' as a binary.
-# Use --copies so the venv doesn't fail on a missing symlink target.
-PYTHON=$(which python3 2>/dev/null || which python 2>/dev/null)
-echo "[0/4] Using Python: $PYTHON ($(${PYTHON} --version 2>&1))"
+# RunPod conda images have the real Python (with torch/CUDA) at /opt/conda.
+# Prefer that over /usr/bin/python3 which is a bare Ubuntu system Python
+# that lacks venv support and doesn't have any GPU libraries.
+PYTHON=$(which /opt/conda/bin/python 2>/dev/null || which python3 2>/dev/null || which python 2>/dev/null)
+echo "[0/4] Using Python: $PYTHON ($($PYTHON --version 2>&1))"
 
 WORKSPACE="/workspace"
 MODELS_DIR="$WORKSPACE/models"
