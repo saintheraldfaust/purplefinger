@@ -26,13 +26,14 @@ function setLoading(loading) {
 // --- WebSocket stream state ---
 let ws           = null;
 let localStream  = null;
-let captureVideo = null;   // hidden <video> to pull frames from
-let captureCanvas = null;  // off-screen canvas for JPEG encoding
-let captureCtx   = null;
+let captureVideo = null;  // hidden <video> to draw from
 let captureTimer = null;
-let waitingReply = false;  // lockstep: don't send until last frame returns
 let gpuIp        = null;
 let gpuPort      = null;
+
+// Send at 480x270 — OffscreenCanvas hardware-encodes JPEG much faster than
+// regular canvas.toBlob() at 640x360. Server normalises to its proc size anyway.
+const SEND_W = 480, SEND_H = 270;
 
 async function startStreaming(ip, port) {
   gpuIp = ip;
@@ -43,28 +44,25 @@ async function startStreaming(ip, port) {
     video: {
       width:     { ideal: 640 },
       height:    { ideal: 360 },
-      frameRate: { ideal: 15, max: 15 },
+      frameRate: { ideal: 20, max: 20 },
     },
     audio: false,
   });
 
-  // PiP preview
   localVideo.srcObject = localStream;
 
-  // Hidden video element — canvas reads from this, avoids re-capturing stream
+  // Hidden video element — OffscreenCanvas draws from this
   captureVideo = document.createElement('video');
   captureVideo.srcObject = localStream;
   captureVideo.muted = true;
   captureVideo.playsInline = true;
   await captureVideo.play();
 
-  // Off-screen canvas for encoding outbound frames
-  captureCanvas = document.createElement('canvas');
-  captureCanvas.width  = 640;
-  captureCanvas.height = 360;
-  captureCtx = captureCanvas.getContext('2d');
+  // OffscreenCanvas — hardware-accelerated JPEG encoding in Chromium
+  const offscreen = new OffscreenCanvas(SEND_W, SEND_H);
+  const offCtx    = offscreen.getContext('2d');
 
-  // Display canvas for inbound (swapped) frames
+  // Display canvas for inbound swapped frames
   const displayCanvas = document.getElementById('remote-canvas');
   displayCanvas.width  = 640;
   displayCanvas.height = 360;
@@ -73,45 +71,48 @@ async function startStreaming(ip, port) {
   ws = new WebSocket(`ws://${ip}:${port}/ws`);
   ws.binaryType = 'arraybuffer';
 
+  // Cap concurrent in-flight encodes — prevents buildup if GPU is slower than camera
+  let _encodes = 0;
+
   ws.onopen = () => {
     videoCard.style.display = 'flex';
     setLog(`Streaming — ${ip}:${port}`);
 
-    // Tick at 15 fps; natural back-pressure via waitingReply keeps it paced to GPU speed
+    // Fire at 20fps; server always processes the latest frame so extra sends just
+    // update the queue — no lockstep stall waiting for a reply.
     captureTimer = setInterval(() => {
-      if (waitingReply || ws.readyState !== WebSocket.OPEN) return;
-      captureCtx.drawImage(captureVideo, 0, 0, 640, 360);
-      captureCanvas.toBlob((blob) => {
-        if (!blob || ws.readyState !== WebSocket.OPEN) return;
-        blob.arrayBuffer().then((buf) => {
-          ws.send(buf);
-          waitingReply = true;
-        });
-      }, 'image/jpeg', 0.80);
-    }, 1000 / 15);
+      if (ws.readyState !== WebSocket.OPEN) return;
+      if (_encodes > 1) return;                // at most 2 encodes in flight
+      if (captureVideo.readyState < 2) return;
+
+      _encodes++;
+      offCtx.drawImage(captureVideo, 0, 0, SEND_W, SEND_H);
+      offscreen.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
+        .then((blob) => {
+          _encodes--;
+          if (blob && ws && ws.readyState === WebSocket.OPEN)
+            blob.arrayBuffer().then((buf) => ws.send(buf));
+        })
+        .catch(() => _encodes--);
+    }, 1000 / 20);
   };
 
   ws.onmessage = (event) => {
-    waitingReply = false;
-    // Decode returned JPEG and paint onto display canvas
     const blob = new Blob([event.data], { type: 'image/jpeg' });
     createImageBitmap(blob).then((bitmap) => {
       displayCtx.drawImage(bitmap, 0, 0, displayCanvas.width, displayCanvas.height);
+      bitmap.close();
     });
   };
 
   ws.onerror = () => setLog('Stream error — check GPU pod');
-  ws.onclose = () => {
-    waitingReply = false;
-    if (gpuIp) setLog('Stream disconnected');
-  };
+  ws.onclose = () => { if (gpuIp) setLog('Stream disconnected'); };
 }
 
 function stopStreaming() {
   gpuIp = null;
   clearInterval(captureTimer);
   captureTimer = null;
-  waitingReply = false;
 
   if (ws) { ws.close(); ws = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
