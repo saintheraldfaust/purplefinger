@@ -17,34 +17,34 @@ fi
 
 WORKSPACE="/workspace"
 MODELS_DIR="$WORKSPACE/models"
-PKGS_DIR="$WORKSPACE/site-packages"
+PYPREFIX="$WORKSPACE/pyprefix"
 CODE_DIR="/app"
 REPO_URL="https://github.com/saintheraldfaust/purplefinger.git"
 
-mkdir -p "$MODELS_DIR" "$PKGS_DIR" "$CODE_DIR"
+mkdir -p "$MODELS_DIR" "$PYPREFIX" "$CODE_DIR"
 
 # Use whatever python3/pip3 the image provides (has torch/CUDA pre-installed).
 PYTHON=$(which python3 2>/dev/null || which python)
 PIP=$(which pip3 2>/dev/null || which pip)
+PY_VER=$($PYTHON -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 echo "[0/4] Python: $PYTHON ($($PYTHON --version 2>&1))  pip: $PIP"
 
-# Add volume packages to Python path
-export PYTHONPATH="$PKGS_DIR:$PYTHONPATH"
+# Add volume packages to Python path (--prefix creates lib/pythonX.Y/site-packages)
+export PYTHONPATH="$PYPREFIX/lib/python$PY_VER/site-packages:$PYTHONPATH"
 
 # --- [1/4] Python packages (cached in volume) ---
-# Install with --target into the volume so packages persist across pod restarts.
-# --no-cache-dir avoids corrupt cached wheels left over in /workspace/.cache/pip.
-# numpy is EXCLUDED -- must come from system Python (pre-built against torch).
-# After install we also purge any numpy that snuck in as a transitive dep.
+# --prefix creates a proper lib/pythonX.Y/site-packages tree (unlike --target).
+# This is required for insightface and other C-extension packages to import correctly.
+# --no-cache-dir avoids corrupt cached wheels.
 
-MARKER="$WORKSPACE/.packages-installed-v14"
+MARKER="$WORKSPACE/.packages-installed-v15"
 if [ ! -f "$MARKER" ]; then
   rm -f "$WORKSPACE/.packages-installed-v"* 2>/dev/null || true
-  echo "[1/4] Wiping old site-packages before fresh install..."
-  rm -rf "$PKGS_DIR"
-  mkdir -p "$PKGS_DIR"
+  echo "[1/4] Wiping old pyprefix before fresh install..."
+  rm -rf "$PYPREFIX"
+  mkdir -p "$PYPREFIX"
   echo "[1/4] Installing Python packages (first time -- cached after this)..."
-  $PIP install --quiet --no-cache-dir --target "$PKGS_DIR" \
+  $PIP install --no-cache-dir --prefix "$PYPREFIX" \
     insightface \
     onnxruntime-gpu \
     aiohttp \
@@ -55,11 +55,9 @@ if [ ! -f "$MARKER" ]; then
     facexlib \
     gfpgan \
     realesrgan
+  SP="$PYPREFIX/lib/python$PY_VER/site-packages"
   echo "[1/4] Purging numpy/torch from volume (must use system versions)..."
-  rm -rf "$PKGS_DIR"/numpy "$PKGS_DIR"/numpy-*.dist-info 2>/dev/null || true
-  rm -rf "$PKGS_DIR"/torch "$PKGS_DIR"/torch-*.dist-info 2>/dev/null || true
-  rm -rf "$PKGS_DIR"/torchvision "$PKGS_DIR"/torchvision-*.dist-info 2>/dev/null || true
-  rm -rf "$PKGS_DIR"/torchaudio "$PKGS_DIR"/torchaudio-*.dist-info 2>/dev/null || true
+  rm -rf "$SP"/numpy* "$SP"/torch* "$SP"/torchvision* "$SP"/torchaudio* 2>/dev/null || true
   touch "$MARKER"
   echo "[1/4] Packages installed and cached."
 else
@@ -67,13 +65,11 @@ else
 fi
 
 # Always purge numpy/torch on every boot in case a dep reinstalled them
-rm -rf "$PKGS_DIR"/numpy "$PKGS_DIR"/numpy-*.dist-info 2>/dev/null || true
-rm -rf "$PKGS_DIR"/torch "$PKGS_DIR"/torch-*.dist-info 2>/dev/null || true
-rm -rf "$PKGS_DIR"/torchvision "$PKGS_DIR"/torchvision-*.dist-info 2>/dev/null || true
-rm -rf "$PKGS_DIR"/torchaudio "$PKGS_DIR"/torchaudio-*.dist-info 2>/dev/null || true
+SP="$PYPREFIX/lib/python$PY_VER/site-packages"
+rm -rf "$SP"/numpy* "$SP"/torch* "$SP"/torchvision* "$SP"/torchaudio* 2>/dev/null || true
 
 # Fix basicsr compatibility with torchvision >= 0.16
-find "$PKGS_DIR" -path "*/basicsr/data/degradations.py" -exec sed -i \
+find "$PYPREFIX" -path "*/basicsr/data/degradations.py" -exec sed -i \
   's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' {} \;
 
 # --- [2/4] Code (always pull latest) ---
