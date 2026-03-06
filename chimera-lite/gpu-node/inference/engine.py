@@ -35,6 +35,9 @@ class SwapEngine:
         from insightface.model_zoo import model_zoo
 
         log.info('Loading InsightFace buffalo_l...')
+        # Cache models on volume so they survive pod restarts
+        import os
+        os.environ.setdefault('INSIGHTFACE_HOME', '/workspace/.insightface')
         self.app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.app.prepare(ctx_id=0, det_size=(320, 320))  # 320 is fast enough for webcam faces
 
@@ -130,20 +133,22 @@ class EnhanceEngine:
     """
 
     WEIGHT = 0.55  # 0=max GFPGAN reconstruction, 1=preserve inswapper
-    ENHANCE_EVERY_N = 2  # run GFPGAN every N frames to boost FPS; reuse last result in between
+    ENHANCE_EVERY_N = 3  # run GFPGAN every N frames; reuse last result in between
 
     def __init__(self, model_path: str = 'models/GFPGANv1.4.pth'):
         from gfpgan import GFPGANer
 
-        log.info('Loading GFPGAN v1.4 from %s...', model_path)
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        log.info('Loading GFPGAN v1.4 from %s (device=%s)...', model_path, device)
         self.gfpgan = GFPGANer(
             model_path=model_path,
             upscale=1,
             arch='clean',
             channel_multiplier=2,
             bg_upsampler=None,
+            device=device,
         )
-        log.info('GFPGAN ready.')
+        log.info('GFPGAN ready on %s.', device)
 
     def enhance(self, frame: np.ndarray, face, original_frame: np.ndarray = None) -> np.ndarray:
         try:
