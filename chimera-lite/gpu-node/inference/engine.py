@@ -129,7 +129,7 @@ class EnhanceEngine:
     Result: every-frame enhancement at ~15-20fps with no pulsing.
     """
 
-    WEIGHT = 0.5   # 0=max GFPGAN reconstruction, 1=preserve inswapper
+    WEIGHT = 0.3   # 0=max GFPGAN reconstruction, 1=preserve inswapper
 
     def __init__(self, model_path: str = 'models/GFPGANv1.4.pth'):
         from gfpgan import GFPGANer

@@ -71,38 +71,67 @@ async function startStreaming(ip, port) {
   ws = new WebSocket(`ws://${ip}:${port}/ws`);
   ws.binaryType = 'arraybuffer';
 
-  // Cap concurrent in-flight encodes — prevents buildup if GPU is slower than camera
-  let _encodes = 0;
+  // --- 1-in-flight send: only send the next frame after we receive the last
+  // response (or after a timeout). This prevents TCP send-buffer accumulation
+  // that causes replayed old movements during lag spikes.
+  let _inFlight    = false;
+  let _sendTimeout = null;
+
+  function sendNextFrame() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (captureVideo.readyState < 2) { setTimeout(sendNextFrame, 16); return; }
+
+    _inFlight = true;
+    offCtx.drawImage(captureVideo, 0, 0, SEND_W, SEND_H);
+    offscreen.convertToBlob({ type: 'image/jpeg', quality: 0.96 })
+      .then((blob) => {
+        if (!blob || !ws || ws.readyState !== WebSocket.OPEN) {
+          _inFlight = false; return;
+        }
+        blob.arrayBuffer().then((buf) => {
+          ws.send(buf);
+          // Safety valve: if the server doesn't respond in 250ms, send anyway
+          // so we don't stall on a dropped response.
+          _sendTimeout = setTimeout(() => { _inFlight = false; sendNextFrame(); }, 250);
+        });
+      })
+      .catch(() => { _inFlight = false; });
+  }
+
+  // --- Latest-only receive: if messages arrive faster than createImageBitmap,
+  // drop the intermediate ones — only ever render the newest frame.
+  let _pendingReceive = null;
+  let _rendering     = false;
+
+  function renderLatest() {
+    if (_pendingReceive === null) return;
+    _rendering = true;
+    const data = _pendingReceive;
+    _pendingReceive = null;
+    createImageBitmap(new Blob([data], { type: 'image/jpeg' })).then((bitmap) => {
+      displayCtx.drawImage(bitmap, 0, 0, displayCanvas.width, displayCanvas.height);
+      bitmap.close();
+      _rendering = false;
+      renderLatest();
+    });
+  }
 
   ws.onopen = () => {
     videoCard.style.display = 'flex';
     setLog(`Streaming — ${ip}:${port}`);
-
-    // Fire at 20fps; server always processes the latest frame so extra sends just
-    // update the queue — no lockstep stall waiting for a reply.
-    captureTimer = setInterval(() => {
-      if (ws.readyState !== WebSocket.OPEN) return;
-      if (_encodes > 1) return;                // at most 2 encodes in flight
-      if (captureVideo.readyState < 2) return;
-
-      _encodes++;
-      offCtx.drawImage(captureVideo, 0, 0, SEND_W, SEND_H);
-      offscreen.convertToBlob({ type: 'image/jpeg', quality: 0.96 })
-        .then((blob) => {
-          _encodes--;
-          if (blob && ws && ws.readyState === WebSocket.OPEN)
-            blob.arrayBuffer().then((buf) => ws.send(buf));
-        })
-        .catch(() => _encodes--);
-    }, 1000 / 20);
+    sendNextFrame(); // kick off the first send
   };
 
   ws.onmessage = (event) => {
-    const blob = new Blob([event.data], { type: 'image/jpeg' });
-    createImageBitmap(blob).then((bitmap) => {
-      displayCtx.drawImage(bitmap, 0, 0, displayCanvas.width, displayCanvas.height);
-      bitmap.close();
-    });
+    // Unblock the send pipeline immediately — grab the current camera frame
+    // before it ages any further.
+    clearTimeout(_sendTimeout);
+    _inFlight = false;
+    sendNextFrame();
+
+    // Queue received frame for display (latest wins)
+    _pendingReceive = event.data;
+    if (!_rendering) renderLatest();
   };
 
   ws.onerror = () => setLog('Stream error — check GPU pod');
