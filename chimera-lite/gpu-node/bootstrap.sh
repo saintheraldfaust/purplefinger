@@ -37,9 +37,12 @@ export PYTHONPATH="$PKGS_DIR:$PYTHONPATH"
 # numpy is EXCLUDED -- must come from system Python (pre-built against torch).
 # After install we also purge any numpy that snuck in as a transitive dep.
 
-MARKER="$WORKSPACE/.packages-installed-v13"
+MARKER="$WORKSPACE/.packages-installed-v14"
 if [ ! -f "$MARKER" ]; then
   rm -f "$WORKSPACE/.packages-installed-v"* 2>/dev/null || true
+  echo "[1/4] Wiping old site-packages before fresh install..."
+  rm -rf "$PKGS_DIR"
+  mkdir -p "$PKGS_DIR"
   echo "[1/4] Installing Python packages (first time -- cached after this)..."
   $PIP install --quiet --no-cache-dir --target "$PKGS_DIR" \
     insightface \
