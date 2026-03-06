@@ -28,10 +28,9 @@ echo "[0/4] Python: $PYTHON ($($PYTHON --version 2>&1))  pip: $PIP"
 # Install to system Python on every boot (packages are ephemeral per container).
 # Volume is used as pip download cache: first boot downloads, every boot after
 # that installs from cached wheels in ~60 sec -- no import path tricks needed.
-echo "[1/4] Installing Python packages (from volume cache after first run)..."
-# Wipe entire pip cache to eliminate any corrupt wheels from previous runs
-rm -rf "$WORKSPACE/.cache/pip"
-$PIP install --quiet --cache-dir "$WORKSPACE/.cache/pip" \
+echo "[1/4] Installing Python packages..."
+# --no-cache-dir: always download fresh, never use potentially corrupt cached wheels
+$PIP install --quiet --no-cache-dir \
   insightface \
   onnxruntime-gpu \
   aiohttp \
