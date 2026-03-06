@@ -24,6 +24,7 @@ class FaceSwapPipeline:
 
     def __init__(self, config: PipelineConfig = None):
         self.config = config or PipelineConfig()
+        self._frame_idx = 0
 
         log.info('Initialising SwapEngine...')
         self.swap = SwapEngine('models/inswapper_128.onnx')
@@ -48,17 +49,18 @@ class FaceSwapPipeline:
         if not self.ready:
             return frame
 
+        self._frame_idx += 1
+
         # Step 1: Face swap (inswapper_128 + feathered blend)
         swapped = self.swap.swap_frame(frame)
 
-        # Step 2: GFPGAN enhancement on face crop every frame.
-        # Running every frame (not every N) is what eliminates pulsing.
-        # Crop approach is fast enough: ~80-100ms vs 150-180ms for full frame.
+        # Step 2: GFPGAN every N frames — halves GPU time, barely visible difference
         if self.enhance is not None and self.swap._cached_target_faces:
-            for face in self.swap._cached_target_faces:
-                try:
-                    swapped = self.enhance.enhance(swapped, face, original_frame=frame)
-                except Exception as e:
-                    log.warning('Enhance failed: %s', e)
+            if self._frame_idx % self.enhance.ENHANCE_EVERY_N == 0:
+                for face in self.swap._cached_target_faces:
+                    try:
+                        swapped = self.enhance.enhance(swapped, face, original_frame=frame)
+                    except Exception as e:
+                        log.warning('Enhance failed: %s', e)
 
         return swapped
