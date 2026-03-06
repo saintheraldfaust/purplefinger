@@ -28,8 +28,20 @@ mkdir -p "$MODELS_DIR" "$PKGS_DIR" "$CODE_DIR"
 export PYTHONPATH="$PKGS_DIR:$PYTHONPATH"
 
 # --- [1/4] Python packages (cached in volume) ---
-MARKER="$WORKSPACE/.packages-installed-v4"
+# IMPORTANT: torch/torchvision must NEVER be installed into the volume.
+# The base image (pytorch/pytorch:2.1.2-cuda12.1) already has them with the
+# correct compiled .so files for that container. Installing torch into
+# /workspace/site-packages creates broken binaries (missing libtorch_global_deps.so)
+# because the compiled libs are non-portable across container restarts.
+# Always purge any torch that leaked into the volume from old installs.
+echo "[1/4] Purging any torch from volume (must stay in base image)..."
+rm -rf "$PKGS_DIR/torch" "$PKGS_DIR/torchvision" "$PKGS_DIR/torchaudio" \
+       "$PKGS_DIR/torch-"* "$PKGS_DIR/torchvision-"* 2>/dev/null || true
+
+MARKER="$WORKSPACE/.packages-installed-v5"
 if [ ! -f "$MARKER" ]; then
+  # Remove old markers so we don't skip the install on version bumps
+  rm -f "$WORKSPACE/.packages-installed-v"* 2>/dev/null || true
   echo "[1/4] Installing Python packages (first time — cached after this)..."
   pip install --quiet --target "$PKGS_DIR" \
     insightface \
