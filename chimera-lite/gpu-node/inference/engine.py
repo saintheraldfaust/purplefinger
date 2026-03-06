@@ -10,6 +10,9 @@ import numpy as np
 import torch
 import logging
 
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True  # speed up conv ops after first frame
+
 log = logging.getLogger('chimera.engine')
 
 
@@ -46,6 +49,7 @@ class SwapEngine:
             model_path,
             providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
         )
+        log.info('inswapper providers: %s', self.swapper.session.get_providers())
 
         self._source_face = None  # cached after set_identity()
         self._cached_target_faces = []   # faces detected in last detection frame
