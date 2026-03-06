@@ -23,14 +23,9 @@ REPO_URL="https://github.com/saintheraldfaust/purplefinger.git"
 
 mkdir -p "$MODELS_DIR" "$PKGS_DIR" "$CODE_DIR"
 
-# Prefer /opt/conda/bin/python -- the RunPod conda Python that has torch/CUDA.
-# Fall back to whatever python3/python is available.
-PYTHON=$( [ -x /opt/conda/bin/python ] && echo /opt/conda/bin/python || \
-          [ -x /opt/conda/bin/python3 ] && echo /opt/conda/bin/python3 || \
-          which python3 2>/dev/null || which python )
-PIP=$( [ -x /opt/conda/bin/pip ] && echo /opt/conda/bin/pip || \
-       [ -x /opt/conda/bin/pip3 ] && echo /opt/conda/bin/pip3 || \
-       which pip3 2>/dev/null || which pip )
+# Use whatever python3/pip3 the image provides (has torch/CUDA pre-installed).
+PYTHON=$(which python3 2>/dev/null || which python)
+PIP=$(which pip3 2>/dev/null || which pip)
 echo "[0/4] Python: $PYTHON ($($PYTHON --version 2>&1))  pip: $PIP"
 
 # Add volume packages to Python path
@@ -38,15 +33,15 @@ export PYTHONPATH="$PKGS_DIR:$PYTHONPATH"
 
 # --- [1/4] Python packages (cached in volume) ---
 # Install with --target into the volume so packages persist across pod restarts.
-# We use the conda pip so compiled extensions link against conda libs correctly.
-# numpy is EXCLUDED -- it must come from conda (compiled against conda torch).
+# --no-cache-dir avoids corrupt cached wheels left over in /workspace/.cache/pip.
+# numpy is EXCLUDED -- must come from system Python (pre-built against torch).
 # After install we also purge any numpy that snuck in as a transitive dep.
 
-MARKER="$WORKSPACE/.packages-installed-v11"
+MARKER="$WORKSPACE/.packages-installed-v12"
 if [ ! -f "$MARKER" ]; then
   rm -f "$WORKSPACE/.packages-installed-v"* 2>/dev/null || true
   echo "[1/4] Installing Python packages (first time -- cached after this)..."
-  $PIP install --quiet --upgrade --target "$PKGS_DIR" \
+  $PIP install --quiet --no-cache-dir --upgrade --target "$PKGS_DIR" \
     insightface \
     onnxruntime-gpu \
     aiohttp \
@@ -57,7 +52,7 @@ if [ ! -f "$MARKER" ]; then
     facexlib \
     gfpgan \
     realesrgan
-  echo "[1/4] Purging numpy from volume (must use conda numpy)..."
+  echo "[1/4] Purging numpy from volume (must use system numpy)..."
   rm -rf "$PKGS_DIR"/numpy "$PKGS_DIR"/numpy-*.dist-info 2>/dev/null || true
   touch "$MARKER"
   echo "[1/4] Packages installed and cached."
