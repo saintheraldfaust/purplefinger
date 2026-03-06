@@ -58,20 +58,23 @@ async def handle_ws(request):
     await ws.prepare(request)
     log.info('WS connected from %s', request.remote)
 
-    # latest[0] always holds the newest unprocessed frame (older ones are dropped)
     latest = [None]
+    frame_event = asyncio.Event()  # signals process_loop immediately when frame arrives
+
+    _recv_count = 0
+    _recv_t0 = [0.0]
 
     async def process_loop():
         global _fps_frame_count, _fps_window_start
         while not ws.closed:
+            await frame_event.wait()
+            frame_event.clear()
             img = latest[0]
             if img is None:
-                await asyncio.sleep(0.001)
                 continue
-            latest[0] = None  # consume
+            latest[0] = None
 
             h, w = img.shape[:2]
-            # Always normalise to processing resolution for consistent speed
             if w != _PROC_W or h != _PROC_H:
                 small = cv2.resize(img, (_PROC_W, _PROC_H), interpolation=cv2.INTER_LINEAR)
             else:
@@ -81,9 +84,9 @@ async def handle_ws(request):
                 t0 = time.perf_counter()
                 swapped_small = await asyncio.to_thread(pipeline.process_frame, small)
                 frame_ms = (time.perf_counter() - t0) * 1000
-                _, buf = cv2.imencode('.jpg', swapped_small if (w == _PROC_W and h == _PROC_H) else
-                    cv2.resize(swapped_small, (w, h), interpolation=cv2.INTER_LINEAR),
-                    [cv2.IMWRITE_JPEG_QUALITY, 85])
+                out = swapped_small if (w == _PROC_W and h == _PROC_H) else \
+                    cv2.resize(swapped_small, (w, h), interpolation=cv2.INTER_LINEAR)
+                _, buf = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 85])
             except Exception as e:
                 log.warning('Frame error: %s', e)
                 continue
@@ -99,7 +102,8 @@ async def handle_ws(request):
                 _fps_window_start = now
             elif _fps_frame_count % 30 == 0:
                 fps = 30.0 / max(now - _fps_window_start, 1e-6)
-                log.info('Pipeline  FPS=%.1f  last_frame=%.0fms', fps, frame_ms)
+                recv_fps = _recv_count / max(now - _recv_t0[0], 1e-6) if _recv_t0[0] else 0
+                log.info('out FPS=%.1f  in FPS=%.1f  last_frame=%.0fms', fps, recv_fps, frame_ms)
                 _fps_window_start = now
 
     proc_task = asyncio.create_task(process_loop())
@@ -109,7 +113,11 @@ async def handle_ws(request):
                 arr = np.frombuffer(msg.data, dtype=np.uint8)
                 img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                 if img is not None:
-                    latest[0] = img  # always replace — stale frames are dropped
+                    latest[0] = img
+                    _recv_count += 1
+                    if _recv_t0[0] == 0.0:
+                        _recv_t0[0] = time.perf_counter()
+                    frame_event.set()  # wake process_loop immediately
             elif msg.type == WSMsgType.ERROR:
                 log.error('WS error: %s', ws.exception())
                 break
