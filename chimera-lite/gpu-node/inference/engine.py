@@ -110,8 +110,126 @@ class SwapEngine:
 
 
 # ---------------------------------------------------------------------------
-# Enhance Engine — CodeFormer face restoration
+# Mouth Enhance Engine — GFPGAN upscale + region CF
 # ---------------------------------------------------------------------------
+
+class MouthEnhanceEngine:
+    """
+    Post-swap mouth-specific enhancement.
+    Mouth at 128×128 is too low-res for detail (open mouth, teeth, tongue).
+    Extract mouth region (landmarks 60–68), upscale 4×, apply GFPGAN
+    denoising + aggressive CodeFormer (fidelity=0.0) to recover expression.
+    """
+
+    def __init__(self):
+        from gfpgan import GFPGANer
+        import torch
+
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # GFPGAN model (auto-downloads to ~/.cache)
+        log.info('Loading GFPGAN for mouth enhancement...')
+        self.gfpgan = GFPGANer(
+            scale=2,
+            model_path='https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth',
+            upscale=2,
+            arch='clean',
+            channel_multiplier=2,
+            bg_upsampler=None,
+            device=self.device,
+        )
+
+        # CodeFormer for aggressive mouth-region reconstruction
+        from basicsr.archs.codeformer_arch import CodeFormer
+        log.info('Loading CodeFormer (mouth mode)...')
+        self.cf_mouth = CodeFormer(
+            dim_embd=512,
+            codebook_size=1024,
+            n_head=8,
+            n_layers=9,
+            connect_list=['32', '64', '128', '256'],
+        ).to(self.device)
+
+        try:
+            ckpt = torch.load('models/codeformer.pth', map_location=self.device)
+            self.cf_mouth.load_state_dict(ckpt['params_ema'])
+            self.cf_mouth.eval()
+        except Exception as e:
+            log.warning('CodeFormer load failed for mouth: %s', e)
+            self.cf_mouth = None
+
+    def enhance_mouth(self, frame: np.ndarray, face_lmk: np.ndarray) -> np.ndarray:
+        """
+        Enhance mouth region using GFPGAN + CodeFormer.
+        face_lmk: 106-point landmarks from insightface.
+        """
+        try:
+            # Mouth region: landmarks 60–68 (inner/outer mouth contour)
+            if face_lmk is None or len(face_lmk) < 69:
+                return frame
+
+            mouth_pts = face_lmk[60:69].astype(np.int32)
+            x_min, x_max = mouth_pts[:, 0].min(), mouth_pts[:, 0].max()
+            y_min, y_max = mouth_pts[:, 1].min(), mouth_pts[:, 1].max()
+
+            # Expand box by 50% to include context (needed for smooth blending)
+            h, w = frame.shape[:2]
+            cx, cy = (x_min + x_max) // 2, (y_min + y_max) // 2
+            mw, mh = (x_max - x_min), (y_max - y_min)
+            pad_w, pad_h = int(mw * 0.25), int(mh * 0.25)
+
+            x1 = max(0, cx - (mw // 2 + pad_w))
+            x2 = min(w, cx + (mw // 2 + pad_w))
+            y1 = max(0, cy - (mh // 2 + pad_h))
+            y2 = min(h, cy + (mh // 2 + pad_h))
+
+            mouth_crop = frame[y1:y2, x1:x2].copy()
+            if mouth_crop.size == 0:
+                return frame
+
+            # GFPGAN upscale 2× for better detail
+            _, _, gf = self.gfpgan.enhance(mouth_crop, has_aligned=False, only_center_face=False, weight=0.5)
+            if gf is None or gf.size == 0:
+                gf = mouth_crop
+
+            # Downscale back to original mouth size
+            gf = cv2.resize(gf, (x2 - x1, y2 - y1), interpolation=cv2.INTER_AREA)
+
+            # CodeFormer aggressive (fidelity=0.0) on mouth at 512px
+            if self.cf_mouth is not None:
+                from basicsr.utils import img2tensor, tensor2img
+                from torchvision.transforms.functional import normalize as tnorm
+
+                # Upsample to 512 for CF input
+                gf_512 = cv2.resize(gf, (512, 512), interpolation=cv2.INTER_CUBIC)
+                t = img2tensor(gf_512 / 255.0, bgr2rgb=True, float32=True)
+                tnorm(t, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True)
+                t = t.unsqueeze(0).to(self.device)
+
+                with torch.no_grad():
+                    # fidelity=0.0 = max CF reconstruction (recover open mouth shape)
+                    cf_out = self.cf_mouth(t, w=0.0, adain=True)[0]
+
+                cf_restored = tensor2img(cf_out, rgb2bgr=True, min_max=(-1, 1))
+                gf = cv2.resize(cf_restored, (x2 - x1, y2 - y1), interpolation=cv2.INTER_AREA)
+
+            # Gaussian blend edges for seamless composite
+            mask = np.zeros((y2 - y1, x2 - x1), dtype=np.uint8)
+            cv2.circle(mask, ((x2 - x1) // 2, (y2 - y1) // 2), min(mw, mh) // 3, 255, -1)
+            mask = cv2.GaussianBlur(mask, (31, 31), 7.0).astype(np.float32) / 255.0
+            mask = mask[:, :, np.newaxis]
+
+            result = frame.copy()
+            result[y1:y2, x1:x2] = (
+                gf.astype(np.float32) * mask +
+                mouth_crop.astype(np.float32) * (1.0 - mask)
+            ).astype(np.uint8)
+
+            return result
+
+        except Exception as e:
+            log.warning('Mouth enhancement failed: %s', e)
+            return frame
 
 class EnhanceEngine:
     """
