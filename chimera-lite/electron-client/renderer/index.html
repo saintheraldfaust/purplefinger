@@ -3,163 +3,488 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src *; media-src *; img-src 'self' blob: data:" />
-  <title>Chimera Lite</title>
+  <title>Project Chimera Lite</title>
   <style>
+    :root {
+      --blue: #2563eb;
+      --blue-2: #1d4ed8;
+      --bg: #050816;
+      --bg-2: #0b1020;
+      --bg-3: #121a2d;
+      --panel: rgba(11, 16, 32, 0.88);
+      --panel-2: rgba(18, 26, 45, 0.95);
+      --border: rgba(96, 165, 250, 0.16);
+      --text: #dbeafe;
+      --muted: #7f8ea8;
+      --shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
-    body {
-      background: #0d0d0d;
-      color: #e0e0e0;
-      font-family: 'Segoe UI', sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 16px;
-      padding: 24px;
-      overflow-y: auto;
+    html, body {
+      height: 100%;
+      background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.18), transparent 28%),
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.10), transparent 22%),
+        linear-gradient(180deg, #050816 0%, #08101e 45%, #060a14 100%);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      overflow: hidden;
     }
 
-    h1 {
-      font-size: 1.6rem;
-      font-weight: 700;
-      letter-spacing: 0.1em;
-      color: #c084fc;
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 100vh;
     }
+
+    #header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 24px;
+      background: rgba(5, 8, 22, 0.82);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(14px);
+    }
+
+    #branding { display: flex; flex-direction: column; gap: 4px; }
+    #branding-title {
+      font-size: 1.2rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #93c5fd;
+    }
+    #branding-sub {
+      font-size: 0.76rem;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+    }
+
+    #header-right { display: flex; align-items: center; gap: 12px; }
 
     #status-badge {
-      font-size: 0.85rem;
-      padding: 4px 14px;
+      font-size: 0.78rem;
+      padding: 5px 14px;
       border-radius: 999px;
-      background: #1e1e1e;
-      color: #888;
-      border: 1px solid #333;
+      background: rgba(15, 23, 42, 0.95);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      white-space: nowrap;
     }
-    #status-badge.active { background: #14532d; color: #4ade80; border-color: #166534; }
-    #status-badge.loading { background: #1c1917; color: #fbbf24; border-color: #78350f; }
-    #status-badge.error { background: #450a0a; color: #f87171; border-color: #7f1d1d; }
+    #status-badge.active { background: rgba(6, 78, 59, 0.35); color: #86efac; border-color: rgba(34, 197, 94, 0.35); }
+    #status-badge.loading { background: rgba(120, 53, 15, 0.30); color: #fcd34d; border-color: rgba(245, 158, 11, 0.35); }
+    #status-badge.error { background: rgba(127, 29, 29, 0.32); color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); }
 
-    .card {
-      background: #1a1a1a;
-      border: 1px solid #2a2a2a;
-      border-radius: 12px;
-      padding: 24px;
-      width: 100%;
+    .ghost-btn,
+    .primary-btn,
+    .danger-btn {
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 0.86rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.12s ease, opacity 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+    }
+    .ghost-btn:hover,
+    .primary-btn:hover,
+    .danger-btn:hover { transform: translateY(-1px); }
+    .ghost-btn:disabled,
+    .primary-btn:disabled,
+    .danger-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+    .ghost-btn {
+      background: rgba(17, 24, 39, 0.9);
+      color: var(--text);
+      border-color: var(--border);
+    }
+    .ghost-btn:hover:not(:disabled) { background: rgba(29, 78, 216, 0.18); }
+
+    .primary-btn {
+      background: linear-gradient(135deg, var(--blue) 0%, #0ea5e9 100%);
+      color: white;
+      box-shadow: 0 10px 30px rgba(37, 99, 235, 0.25);
+    }
+
+    .danger-btn {
+      background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+      color: white;
+      display: none;
+    }
+
+    #body {
+      display: grid;
+      grid-template-columns: 330px 1fr;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    #sidebar {
+      padding: 20px;
+      border-right: 1px solid var(--border);
+      background: rgba(4, 9, 20, 0.70);
+      backdrop-filter: blur(18px);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: var(--shadow);
       display: flex;
       flex-direction: column;
       gap: 12px;
     }
 
-    .card label {
-      font-size: 0.8rem;
-      color: #888;
+    .panel-title {
+      font-size: 0.72rem;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.08em;
+      color: #93c5fd;
+      font-weight: 800;
+    }
+
+    .panel-copy {
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.45;
     }
 
     #face-preview {
-      width: 80px;
-      height: 80px;
-      border-radius: 50%;
+      width: 84px;
+      height: 84px;
+      border-radius: 18px;
       object-fit: cover;
-      border: 2px solid #c084fc;
+      border: 1px solid rgba(96, 165, 250, 0.28);
+      box-shadow: 0 10px 26px rgba(37, 99, 235, 0.18);
       display: none;
     }
 
-    .face-row {
-      display: flex;
-      align-items: center;
-      gap: 16px;
+    .face-row { display: flex; align-items: center; gap: 14px; }
+    .face-meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .face-meta strong { font-size: 0.9rem; color: var(--text); }
+
+    .action-stack { display: grid; gap: 10px; }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
     }
 
-    button {
-      padding: 12px 20px;
-      border: none;
-      border-radius: 8px;
-      font-size: 0.95rem;
-      font-weight: 600;
+    .segmented-btn {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(17, 24, 39, 0.72);
+      color: var(--muted);
+      padding: 10px 12px;
+      text-align: left;
       cursor: pointer;
-      transition: opacity 0.15s;
+      transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, transform 0.12s ease;
     }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-    #btn-upload { background: #3b3b3b; color: #e0e0e0; }
-    #btn-start  { background: #7c3aed; color: #fff; width: 100%; padding: 14px; }
-    #btn-stop   { background: #991b1b; color: #fff; width: 100%; padding: 14px; display: none; }
+    .segmented-btn:hover { transform: translateY(-1px); }
+    .segmented-btn.active {
+      background: rgba(37, 99, 235, 0.18);
+      border-color: rgba(96, 165, 250, 0.42);
+      color: var(--text);
+    }
 
-    #video-card { display: none; }
+    .segmented-btn strong {
+      display: block;
+      font-size: 0.82rem;
+      margin-bottom: 4px;
+    }
 
-    #video-wrap {
+    .segmented-btn span {
+      display: block;
+      font-size: 0.72rem;
+      line-height: 1.35;
+    }
+
+    .ctrl-row {
+      display: grid;
+      grid-template-columns: 78px 1fr 44px;
+      gap: 10px;
+      align-items: center;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .ctrl-row .val {
+      text-align: right;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 5px;
+      border-radius: 999px;
+      background: rgba(30, 41, 59, 0.95);
+      outline: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #60a5fa 0%, #22d3ee 100%);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+      cursor: pointer;
+    }
+
+    #stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .stat-box {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .stat-label {
+      font-size: 0.66rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+
+    .stat-val {
+      font-size: 1.05rem;
+      font-weight: 800;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    #main {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      padding: 20px;
+      display: flex;
+      align-items: stretch;
+      justify-content: stretch;
+    }
+
+    #video-shell {
       position: relative;
       width: 100%;
-      aspect-ratio: 16/9;
-      background: #000;
-      border-radius: 8px;
+      height: 100%;
+      border-radius: 24px;
       overflow: hidden;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(2, 6, 23, 0.96) 0%, rgba(3, 7, 18, 0.98) 100%);
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     #remote-canvas {
       width: 100%;
       height: 100%;
-      object-fit: cover;
+      object-fit: contain;
+      display: block;
+      image-rendering: auto;
+      background: #020617;
+    }
+
+    #video-empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      color: var(--muted);
+      text-align: center;
+      padding: 24px;
+      pointer-events: none;
+    }
+
+    #video-empty strong {
+      color: #bfdbfe;
+      font-size: 1rem;
+      letter-spacing: 0.03em;
     }
 
     #local-video {
       position: absolute;
-      bottom: 8px;
-      right: 8px;
-      width: 90px;
-      height: 68px;
+      right: 18px;
+      bottom: 18px;
+      width: 220px;
+      aspect-ratio: 16 / 9;
       object-fit: cover;
-      border-radius: 6px;
-      border: 1px solid #444;
-      opacity: 0.85;
+      border-radius: 18px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      background: #020617;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
     }
 
-    #video-sublabel {
-      font-size: 0.7rem;
-      color: #444;
-      text-align: right;
+    #overlay {
+      position: absolute;
+      top: 18px;
+      left: 18px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      pointer-events: none;
     }
 
-    #log {
+    .hud-pill {
+      background: rgba(2, 6, 23, 0.72);
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      backdrop-filter: blur(10px);
+      color: #dbeafe;
+      border-radius: 999px;
+      padding: 7px 12px;
+      font-size: 0.76rem;
+      font-weight: 700;
+    }
+
+    #footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 20px;
+      border-top: 1px solid var(--border);
+      background: rgba(5, 8, 22, 0.86);
+      backdrop-filter: blur(12px);
       font-size: 0.75rem;
-      color: #555;
-      text-align: center;
-      min-height: 1.2em;
+      color: var(--muted);
     }
 
+    #log { min-height: 1.2em; color: #cbd5e1; }
+    #obs-hint span { color: #7dd3fc; }
     input[type="file"] { display: none; }
   </style>
 </head>
 <body>
-  <h1>CHIMERA LITE</h1>
-  <div id="status-badge">Idle</div>
-
-  <div class="card">
-    <label>Identity Face</label>
-    <div class="face-row">
-      <img id="face-preview" alt="face" />
-      <button id="btn-upload">Choose Photo</button>
+  <header id="header">
+    <div id="branding">
+      <div id="branding-title">Project Chimera Lite</div>
+      <div id="branding-sub">Developed by Saint Herald Faust (Ken)</div>
     </div>
-    <input type="file" id="face-input" accept="image/*" />
-  </div>
-
-  <button id="btn-start">Start Session</button>
-  <button id="btn-stop">Stop Session</button>
-
-  <div class="card" id="video-card">
-    <label>Live Output</label>
-    <div id="video-wrap">
-      <canvas id="remote-canvas"></canvas>
-      <video id="local-video"  autoplay playsinline muted></video>
+    <div id="header-right">
+      <div id="status-badge">Idle</div>
+      <button id="btn-fullscreen" class="ghost-btn">Fullscreen</button>
     </div>
-    <div id="video-sublabel">pip: your camera &nbsp;→&nbsp; main: swapped output</div>
+  </header>
+
+  <div id="body">
+    <aside id="sidebar">
+      <section class="panel">
+        <div class="panel-title">Identity Face</div>
+        <div class="face-row">
+          <img id="face-preview" alt="face" />
+          <div class="face-meta">
+            <strong>Source identity</strong>
+            <div class="panel-copy">Upload the face you want Chimera Lite to track and swap live.</div>
+          </div>
+        </div>
+        <button id="btn-upload" class="ghost-btn">Choose Photo</button>
+        <input type="file" id="face-input" accept="image/*" />
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Session Control</div>
+        <div class="action-stack">
+          <button id="btn-start" class="primary-btn">Start Session</button>
+          <button id="btn-stop" class="danger-btn">Stop Session</button>
+        </div>
+        <div class="panel-copy">Launch the GPU pod, connect the live feed, and mirror the final output into OBS.</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Stream Mode</div>
+        <div class="segmented">
+          <button id="btn-mode-realtime" class="segmented-btn active">
+            <strong>Realtime</strong>
+            <span>Swap only. Lower latency, steadier motion.</span>
+          </button>
+          <button id="btn-mode-quality" class="segmented-btn">
+            <strong>Quality</strong>
+            <span>GFPGAN enabled. Sharper face, slightly more delay.</span>
+          </button>
+        </div>
+        <div class="panel-copy" id="mode-summary">Realtime mode targets a lower, steadier send rate and disables face enhancement on the GPU.</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Preview Adjustments</div>
+        <div class="ctrl-row">
+          <span>Bright</span>
+          <input type="range" id="ctrl-brightness" min="0.7" max="1.4" step="0.05" value="1.00" />
+          <span class="val" id="val-brightness">1.00</span>
+        </div>
+        <div class="ctrl-row">
+          <span>Contrast</span>
+          <input type="range" id="ctrl-contrast" min="0.7" max="1.5" step="0.05" value="1.00" />
+          <span class="val" id="val-contrast">1.00</span>
+        </div>
+        <div class="ctrl-row">
+          <span>Saturation</span>
+          <input type="range" id="ctrl-saturation" min="0.6" max="1.6" step="0.05" value="1.00" />
+          <span class="val" id="val-saturation">1.00</span>
+        </div>
+        <button id="btn-reset-preview" class="ghost-btn">Reset Preview</button>
+        <div class="panel-copy">These controls affect only what you see in the app preview, not the feed sent to the GPU.</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Live Monitor</div>
+        <div id="stats-grid">
+          <div class="stat-box"><div class="stat-label">Sent FPS</div><div class="stat-val" id="st-send-fps">—</div></div>
+          <div class="stat-box"><div class="stat-label">Recv FPS</div><div class="stat-val" id="st-recv-fps">—</div></div>
+          <div class="stat-box"><div class="stat-label">Latency</div><div class="stat-val" id="st-latency">—</div></div>
+          <div class="stat-box"><div class="stat-label">Mode / Cap</div><div class="stat-val" id="st-mode">—</div></div>
+        </div>
+      </section>
+    </aside>
+
+    <main id="main">
+      <div id="video-shell">
+        <canvas id="remote-canvas"></canvas>
+        <div id="video-empty">
+          <strong>Ready for live monitoring</strong>
+          <div>Start a session to view the swapped output, local camera PiP, and stream health at a glance.</div>
+        </div>
+        <div id="overlay">
+          <div class="hud-pill">Mode <span id="ov-mode">—</span></div>
+          <div class="hud-pill">Send <span id="ov-send-fps">—</span></div>
+          <div class="hud-pill">Recv <span id="ov-recv-fps">—</span></div>
+          <div class="hud-pill">Latency <span id="ov-latency">—</span></div>
+        </div>
+        <video id="local-video" autoplay playsinline muted></video>
+      </div>
+    </main>
   </div>
 
-  <div id="log"></div>
-  <div id="obs-hint" style="font-size:0.72rem;color:#555;text-align:center;padding-bottom:8px;">
-    OBS Browser Source → <span style="color:#a78bfa;">http://localhost:7891</span> &nbsp;|&nbsp; set mic in OBS Audio
-  </div>
+  <footer id="footer">
+    <div id="log">Ready</div>
+    <div id="obs-hint">OBS Browser Source → <span>http://localhost:7891</span></div>
+  </footer>
 
   <script src="app.js"></script>
 </body>
