@@ -1,487 +1,200 @@
+# Chimera Lite — Current System State
 
-Chimera Lite is a single-user GPU-powered real-time face-swap streaming system. It consists of: 1. Electron Desktop Client 2. Minimal Node.js Backend 3. On-demand RTX A10G GPU node 4. WebRTC streaming pipeline 5. OBS Virtual Camera output
-
-We are using vagon cloud PC. You are to guide me through setting up the account on vagon and what to do. and any other things.
-
-Here’s the **full, production-ready Chimera Lite v1.1 architecture**, fully integrating the advanced FaceShifter/FOMM-style pipeline, landmark tracking, temporal smoothing, and adaptive blending, while keeping the minimal infrastructure philosophy of v1.0.
+**Last updated:** March 7, 2026
 
 ---
 
-# CHIMERA LITE v1.1
+## What It Actually Is
 
-**Solo Hacker GPU Face-Swap System — Advanced Pipeline**
+A single-user real-time face-swap system running at **18–20 FPS** on a RunPod RTX 5090.
 
-Production-Optimized, Infrastructure-Minimal, High-Quality FaceSwaps
+- **Electron client** captures your webcam, sends frames to the GPU, and displays the swapped result
+- **Node.js backend** provisions/destroys the RunPod GPU pod on demand
+- **Python inference server** on the GPU swaps your face with an uploaded identity photo
 
----
-
-## 1️⃣ System Overview
-
-Chimera Lite v1.1 is a **single-user GPU-powered real-time face-swap streaming system**.
-
-It now supports:
-
-* High-quality, robust face swaps using **FaceShifter Core** + optional **FOMM motion stabilization**
-* Landmark tracking (MediaPipe FaceMesh) for stable alignment
-* Temporal smoothing for jitter-free output
-* Uploaded user identity images
-
-### Components
-
-1. **Electron Desktop Client**
-2. **Minimal Node.js Backend**
-3. **On-demand RTX A10G GPU Node** (or higher)
-4. **WebRTC streaming pipeline**
-5. **OBS Virtual Camera output**
-
-**Still minimal:**
-No database, no multi-user, no autoscaling, no analytics
+No WebRTC. No TURN server. No MediaPipe. No FaceShifter. No FOMM. All of that was the original design doc — none of it made it into the actual build.
 
 ---
 
-## 2️⃣ High-Level Architecture
+## Architecture
 
 ```
-Electron Client
-    │
-    │ HTTPS (Start/Stop, Upload Face)
-    ▼
-Minimal Express Backend
-    │
-    │ Provision GPU via API
-    │ Forward uploaded face for embedding
-    ▼
-RTX A10G GPU Node
-    │
-    │ Advanced Face-Swap Pipeline
-    │ (FaceShifter + FOMM optional)
-    │
-    │ NVENC Encode → WebRTC
-    ▼
-Electron → OBS Virtual Camera
+Electron Client (your PC)
+  │
+  │  WebSocket (raw JPEG frames, 480×270 @ 70% quality, 20fps)
+  │
+  ▼
+Python aiohttp server (RunPod GPU pod)
+  │
+  ├─ insightface inswapper_128.onnx   (face swap, CUDAExecutionProvider)
+  └─ GFPGAN v1.4                      (face enhancement, torch.autocast fp16)
+  │
+  │  WebSocket (swapped JPEG frames back)
+  │
+  ▼
+Electron Client (displays result in <img> tag)
 ```
 
-* Deterministic, GPU-optimized, minimal infra
+Backend (Node.js, eventually Render) sits between the Electron client and RunPod API — it provisions the pod and returns the WebSocket URL.
 
 ---
 
-## 3️⃣ Infrastructure Components
+## Infrastructure
 
-### 3.1 Backend
-
-Host on:
-
-* Small VPS or Render instance
-* Requirements: 1 vCPU, 512MB–1GB RAM
-
-Responsibilities:
-
-* Validate API token
-* Start GPU instance
-* Stop GPU instance
-* Return GPU connection info
-* Forward uploaded face images to GPU node for embeddings
-* Track single active session (in memory)
-
-No database needed
+| Component | Details |
+|---|---|
+| **GPU** | RunPod RTX 5090, Ubuntu 24.04 (`runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`) |
+| **CUDA** | 12.8.1, PyTorch 2.8, sm_120 |
+| **Python** | `/usr/bin/python3` 3.12.3, installed to system site-packages every boot |
+| **Storage** | RunPod Network Volume — pip cache + model weights survive pod restarts |
+| **Backend** | Node.js, runs locally (Render deploy pending) |
+| **Client** | Electron |
 
 ---
 
-### 3.2 GPU Node
+## Bootstrap (`bootstrap.sh`)
 
-Provider: Vagon RTX A10G (or similar)
+Runs on every pod start via RunPod template command (curl from GitHub → bash).
 
-Minimum specs:
+1. Installs system packages (git, wget, libgl1, etc.) if missing
+2. `unset PIP_CACHE_DIR` — overrides RunPod's env var that pointed to ephemeral storage
+3. `pip install --cache-dir /workspace/.cache/pip` — installs to system Python, volume as download cache
+   - First boot: ~5 min (downloads wheels)
+   - Subsequent boots: ~60 sec (installs from cached wheels)
+4. Applies `basicsr` torchvision compatibility fix (inline Python)
+5. `git clone` or `git pull` latest code from GitHub to `/app`
+6. Symlinks `/workspace/models` → `/app/models`
+7. Downloads `GFPGANv1.4.pth` and `inswapper_128.onnx` to volume if missing
+8. Starts `webrtc_server.py` (the WebSocket inference server)
 
-* NVIDIA RTX A10G
-* 24–48GB VRAM
-* 64–192GB RAM
-* 16–48 vCPU
-
-OS: Ubuntu 22.04
-
-Responsibilities:
-
-* Run **FaceShifter Core (TensorRT FP16)**
-* MediaPipe FaceMesh for landmark tracking
-* ROI crop, temporal smoothing, adaptive blending
-* Optional FOMM motion stabilization
-
----
-
-### 3.3 TURN Server (WebRTC)
-
-Option A: Daily.co
-Option B: Self-hosted coturn
-
-Minimal cost; 2–4 USD/month
-
----
-
-## 4️⃣ Backend Implementation
-
-### 4.1 Environment Variables
-
+**RunPod template command:**
 ```bash
-API_TOKEN=supersecret
-GPU_API_KEY=provider_key
-GPU_IMAGE_ID=ami-xxxx
-```
-
-### 4.2 Express Endpoints
-
-* `POST /start` → provision GPU node
-* `POST /stop` → destroy GPU node
-* `POST /upload-face` → send uploaded identity image to GPU
-* `GET /status` → active session info
-
-### Session State (In Memory)
-
-```js
-let activeSession = null;
-let uploadedFace = null; // base64 or file path
+bash -c "python -c \"import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/saintheraldfaust/purplefinger/main/chimera-lite/gpu-node/bootstrap.sh', '/tmp/bs.sh')\" && bash /tmp/bs.sh"
 ```
 
 ---
 
-## 5️⃣ GPU Node Setup
+## Inference Pipeline (`inference/`)
 
-1. Install CUDA 12.x, cuDNN, TensorRT, PyTorch (CUDA build)
-2. Install MediaPipe, ONNX, Torch, OpenCV, aiortc
-3. Convert FaceShifter / FOMM models to TensorRT FP16
-4. Precompute embedding for uploaded face image
+### `engine.py`
 
----
+**`SwapEngine`**
+- insightface `buffalo_l`, det_size=320×320
+- `INSIGHTFACE_HOME=/workspace/.insightface` (volume cache, avoids re-download)
+- `inswapper_128.onnx` on `CUDAExecutionProvider`
+- Detects every frame (mouth moves too fast for stale landmarks)
+- Blends swap result using face contour convex hull (lmk points 0–32), Gaussian feathered (51×51, σ=14)
 
-## 6️⃣ Advanced GPU Inference Pipeline
+**`EnhanceEngine`**
+- GFPGAN v1.4, `has_aligned=True` fast path (skips internal RetinaFace)
+- `torch.autocast('cuda')` for fp16 speed (avoids dtype mismatch from `.half()`)
+- `ENHANCE_EVERY_N = 4` — enhances every 4th frame, passes raw swap on others
+- `WEIGHT = 0.55` — blends GFPGAN output 55% with original
 
-```
-Frame Capture (Electron → GPU)
-   ↓
-RetinaFace Detection (interval-based)
-   ↓
-Landmark Tracking (MediaPipe FaceMesh)
-   ↓
-Temporal Smoothing (BBox + landmarks)
-   ↓
-ROI Crop (padded + stabilized)
-   ↓
-FaceShifter Core (TensorRT FP16)
-   ↓
-Optional Motion Stabilization Layer (FOMM)
-   ↓
-Adaptive Blending + Edge Mask
-   ↓
-Temporal Output Smoothing
-   ↓
-NVENC Encode (H.264/H.265)
-   ↓
-WebRTC Output
-```
+**`_apply_mouth_override`** (inside SwapEngine)
+- Pastes real camera mouth over swapped result using kps[3]/kps[4]
+- Soft elliptical Gaussian feather — prevents phantom/wrong teeth
 
-**Notes:**
+### `pipeline.py`
 
-* **Identity injection:** Use uploaded face image for embedding
-* **Temporal smoothing:** Reduces jitter on landmarks & blended output
-* **Adaptive blending:** Edge feathering + color match to frame
-* **Optional FOMM:** Stabilizes head/eye/mouth motion
+- Runs SwapEngine + EnhanceEngine in sequence
+- `_frame_idx` counter for ENHANCE_EVERY_N gating
+- Logs per-stage timing every 30 frames: `swap=Xms enhance=Yms total=Zms`
+
+### `webrtc_server.py`
+
+- `aiohttp` WebSocket server
+- `asyncio.Event` for immediate frame processing (no polling sleep)
+- `_PROC_W, _PROC_H = 480, 270`
+- Separate in/out FPS counters logged every second
+- JPEG output quality 85
+- Logs CUDA device at startup
 
 ---
 
-## 7️⃣ Electron Client
+## Client (`electron-client/`)
 
-Responsibilities:
+### `renderer/app.js`
 
-1. Call `/start` → receive GPU IP
-2. Upload user face `/upload-face`
-3. Connect WebRTC → hidden video element
-4. Launch OBS → Browser Source → Virtual Camera output
+- `SEND_W = 480, SEND_H = 270` — reduced from 640×360 to cut frame payload size
+- JPEG encode quality `0.7` — ~15KB/frame vs ~60KB at 96% quality
+- 20fps send timer, max 2 encodes in-flight
+- Draws received frames into a `<canvas>` element
 
----
+### `main.js` / `preload.js`
 
-## 8️⃣ Performance Optimizations
-
-* FP16 TensorRT → reduces VRAM, increases FPS
-* ROI-only inference → 60–70% compute reduction
-* Async CUDA streams → non-blocking execution
-* NVENC → hardware H.264/H.265 encoding
-* Interval-based detection → skip frames without losing quality
-
-**Expected:**
-
-* 720p, 30–45 FPS
-* Latency <200ms
-* Stable single-user experience
+- Standard Electron shell
+- IPC bridge: renderer ↔ main for WebSocket URL, start/stop controls
 
 ---
 
-## 9️⃣ Cold Start Timeline
+## Backend (`backend/`)
 
-1. User clicks Start
-2. Backend provisions GPU (1–3 min)
-3. Model loads + face embedding computed (~10–15s)
-4. WebRTC connects → streaming
+### `server.js`
 
----
+- `POST /start` — provisions RunPod pod, polls until ready, returns `wsUrl`
+- `GET /ready` — returns `{ ready: true, wsUrl }` when pod is up (non-blocking)
+- `POST /stop` — terminates pod
 
-## 🔟 Cost Model
+### `gpuProvider.js`
 
-* GPU (RTX A10G, 2 hrs/month): ~$2.40
-* Backend VPS: ~$6
-* TURN: ~$1–4
-
-**Total:** ~$6–10/month
+- RunPod GraphQL API
+- Attaches network volume (`RUNPOD_NETWORK_VOLUME_ID` from `.env`)
+- GPU type: `NVIDIA GeForce RTX 5090`
+- Template ID: `p7z3rvy5dl`
 
 ---
 
-## 11️⃣ Security Model
+## Performance
 
-* Single static API token
-* GPU destroyed after session
-* No public endpoints except WebRTC
-* Minimal attack surface
-
----
-
-## 12️⃣ Failure Handling
-
-* Electron crash → backend kills GPU after timeout (e.g., 3 hours max)
-
-```js
-setTimeout(() => {
-   if (activeSession) destroyInstance();
-}, 3 * 60 * 60 * 1000);
-```
+| Metric | Value |
+|---|---|
+| Client send rate | 20 FPS |
+| GPU in FPS | ~20 FPS |
+| GPU out FPS | ~18–20 FPS |
+| Swap time | ~26ms |
+| Enhance time | ~33ms (every 4th frame) |
+| Total GPU latency | ~59ms |
 
 ---
 
-## 13️⃣ Upgrade Path
+## What Works ✅
 
-* Multi-user / SaaS → add session DB, warm GPU pool, JWT auth
-* For now → keep minimal
+- WebSocket streaming (no TURN, no WebRTC complexity)
+- 20fps OffscreenCanvas JPEG client
+- Producer/consumer server (latest-frame-wins, no queue buildup)
+- Bootstrap: system Python + volume pip cache, reliable every boot
+- RTX 5090 compatible (sm_120, CUDA 12.8.1, PyTorch 2.8)
+- GFPGAN on CUDA with autocast fp16
+- Real camera mouth overlay (no phantom teeth)
+- Non-blocking `/start` + `/ready` polling UI
+- Network volume attached (models + pip cache persist)
+- 18–20fps consistent end-to-end
 
----
+## What Doesn't Work / Not Built Yet ❌
 
-## 14️⃣ Full Project Folder Structure
-
-```
-chimera-lite/
-│
-├── backend/
-│   ├── package.json
-│   ├── server.js
-│   ├── gpuProvider.js
-│   ├── config.js
-│   └── .env
-│
-├── electron-client/
-│   ├── package.json
-│   ├── main.js
-│   ├── preload.js
-│   ├── renderer/
-│   │   ├── index.html
-│   │   └── app.js
-│   └── obs-launcher.js
-│
-├── gpu-node/
-│   ├── bootstrap.sh
-│   ├── docker/
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   ├── models/
-│   │   ├── faceshifter_fp16.plan
-│   │   ├── fomm_fp16.plan
-│   │   └── mediapipe_landmarks.model
-│   ├── inference/
-│   │   ├── engine.py
-│   │   ├── pipeline.py
-│   │   └── webrtc_server.py
-│   └── build_engine.py
-│
-└── deployment/
-    ├── vps-setup.md
-    ├── gpu-ami-build.md
-    └── production-checklist.md
-```
+- **Audio** — no audio forwarding at all currently
+- **Backend deploy** — still running locally, Render deploy not done
+- **OBS virtual camera** — not implemented
+- **Beard/hair transfer** — not solvable cleanly in real-time; warp approaches produce visible artifacts
 
 ---
 
-This is now a **fully robust implementation architecture** that includes:
+## Known Issues & Decisions
 
-* Uploaded face images
-* RetinaFace + MediaPipe landmark tracking
-* Temporal smoothing
-* FaceShifter Core FP16
-* Optional FOMM motion stabilization
-* Adaptive blending + output smoothing
-* Minimal infrastructure philosophy
-
-It’s ready for an engineer to implement immediately, or for an LLM agent to extend safely.
-
-
-Perfect. Here’s a **robust `pipeline.py` layout** for Chimera Lite v1.1 GPU Node, integrating **FaceShifter Core**, optional **FOMM motion stabilization**, **MediaPipe landmarks**, **temporal smoothing**, **ROI crop**, and **adaptive blending**. This is modular and ready for devs to drop in your trained models.
+| Issue | Root Cause | Fix |
+|---|---|---|
+| Corrupt pip wheel on every boot | RunPod bakes `PIP_CACHE_DIR` pointing at ephemeral storage into container env | `unset PIP_CACHE_DIR` in bootstrap |
+| 3–8 FPS | Sending 640×360 @ 96% quality (~60KB/frame) saturated the WebSocket | Reduced to 480×270 @ 70% (~15KB/frame) |
+| GFPGAN fp16 dtype mismatch | `.half()` on model caused "Input type (float) and bias type (c10::Half)" error | Replaced with `torch.autocast('cuda')` |
+| insightface `buffalo_l` re-downloads every boot | Default `~/.insightface` is ephemeral container storage | `INSIGHTFACE_HOME=/workspace/.insightface` on volume |
+| asyncio frame polling overhead | `await asyncio.sleep(0.001)` loop | Replaced with `asyncio.Event` signaling |
 
 ---
 
-```python
-# gpu-node/inference/pipeline.py
+## Next Up
 
-import cv2
-import numpy as np
-import torch
-from mediapipe import solutions as mp_solutions
+1. **Audio** — forward mic audio alongside video frames
+2. **Backend deploy** — Render
+3. **OBS virtual camera** — pipe output canvas into virtual cam device
 
-# Optional imports for FaceShifter + FOMM
-# Replace with actual TensorRT wrapper modules
-from engine import FaceShifterEngine, FOMMEngine  
-
-# -------------------------------
-# Configuration
-# -------------------------------
-class PipelineConfig:
-    FACE_DETECT_INTERVAL = 3           # Detect face every N frames
-    ROI_PADDING = 0.25                 # Expand bbox by this fraction
-    SMOOTHING_ALPHA = 0.7              # Temporal smoothing weight
-    USE_FOMM = True                     # Enable motion stabilization
-    DEVICE = 'cuda:0'
-
-# -------------------------------
-# Helpers
-# -------------------------------
-def expand_bbox(bbox, padding, frame_shape):
-    x, y, w, h = bbox
-    pad_x = int(w * padding)
-    pad_y = int(h * padding)
-    x1 = max(0, x - pad_x)
-    y1 = max(0, y - pad_y)
-    x2 = min(frame_shape[1], x + w + pad_x)
-    y2 = min(frame_shape[0], y + h + pad_y)
-    return (x1, y1, x2, y2)
-
-def temporal_smooth(prev, current, alpha):
-    if prev is None:
-        return current
-    return alpha * prev + (1 - alpha) * current
-
-# -------------------------------
-# Main Pipeline Class
-# -------------------------------
-class FaceSwapPipeline:
-    def __init__(self, config: PipelineConfig):
-        self.config = config
-
-        # Face detection & landmark
-        self.face_detector = cv2.dnn.readNetFromCaffe(
-            'models/deploy.prototxt',
-            'models/res10_300x300_ssd_iter_140000.caffemodel'
-        )
-        self.mp_face_mesh = mp_solutions.face_mesh.FaceMesh(
-            max_num_faces=1,
-            refine_landmarks=True
-        )
-
-        # Engines
-        self.faceshifter = FaceShifterEngine('models/faceshifter_fp16.plan', device=config.DEVICE)
-        self.fomm = FOMMEngine('models/fomm_fp16.plan', device=config.DEVICE) if config.USE_FOMM else None
-
-        # State for smoothing
-        self.prev_bbox = None
-        self.prev_landmarks = None
-
-    # ---------------------------
-    # Main frame processing
-    # ---------------------------
-    def process_frame(self, frame: np.ndarray, target_embedding: np.ndarray) -> np.ndarray:
-        # 1. Detect face (interval-based)
-        bbox = self.detect_face(frame)
-        if bbox is None:
-            return frame  # fallback: no face detected
-
-        # 2. Landmark tracking
-        landmarks = self.detect_landmarks(frame, bbox)
-
-        # 3. Temporal smoothing
-        bbox_smoothed = temporal_smooth(self.prev_bbox, bbox, self.config.SMOOTHING_ALPHA)
-        landmarks_smoothed = temporal_smooth(self.prev_landmarks, landmarks, self.config.SMOOTHING_ALPHA)
-
-        self.prev_bbox = bbox_smoothed
-        self.prev_landmarks = landmarks_smoothed
-
-        # 4. ROI Crop (padded + stabilized)
-        x1, y1, x2, y2 = expand_bbox(bbox_smoothed, self.config.ROI_PADDING, frame.shape)
-        roi = frame[y1:y2, x1:x2]
-
-        # 5. FaceShifter Core Swap
-        swapped_roi = self.faceshifter.swap_face(roi, target_embedding, landmarks_smoothed)
-
-        # 6. Optional FOMM Motion Stabilization
-        if self.fomm:
-            swapped_roi = self.fomm.stabilize(swapped_roi, landmarks_smoothed)
-
-        # 7. Adaptive blending + edge mask
-        blended_frame = self.blend_roi(frame, swapped_roi, x1, y1, x2, y2)
-
-        # 8. Temporal output smoothing (optional post-processing)
-        final_frame = blended_frame  # Can implement exponential smoothing here if desired
-
-        return final_frame
-
-    # ---------------------------
-    # Face Detection
-    # ---------------------------
-    def detect_face(self, frame: np.ndarray):
-        h, w = frame.shape[:2]
-        blob = cv2.dnn.blobFromImage(frame, 1.0, (300, 300),
-                                     (104.0, 177.0, 123.0))
-        self.face_detector.setInput(blob)
-        detections = self.face_detector.forward()
-        if detections.shape[2] > 0:
-            # pick the highest confidence face
-            i = np.argmax(detections[0, 0, :, 2])
-            confidence = detections[0, 0, i, 2]
-            if confidence > 0.5:
-                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
-                x1, y1, x2, y2 = box.astype(int)
-                return (x1, y1, x2 - x1, y2 - y1)
-        return None
-
-    # ---------------------------
-    # Landmark Detection
-    # ---------------------------
-    def detect_landmarks(self, frame: np.ndarray, bbox):
-        x, y, w, h = bbox
-        roi = frame[y:y+h, x:x+w]
-        rgb_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
-        results = self.mp_face_mesh.process(rgb_roi)
-        if results.multi_face_landmarks:
-            landmarks = results.multi_face_landmarks[0]
-            # convert to pixel coordinates
-            pts = np.array([[lm.x * w + x, lm.y * h + y] for lm in landmarks.landmark])
-            return pts
-        return None
-
-    # ---------------------------
-    # ROI Blending
-    # ---------------------------
-    def blend_roi(self, frame, roi_swapped, x1, y1, x2, y2):
-        mask = 255 * np.ones_like(roi_swapped, dtype=np.uint8)
-        mask = cv2.GaussianBlur(mask, (15, 15), 0)  # feather edges
-        blended = cv2.seamlessClone(roi_swapped, frame, mask, ((x1+x2)//2, (y1+y2)//2),
-                                    cv2.NORMAL_CLONE)
-        return blended
-```
-
----
-
-### ✅ Features Implemented in This Pipeline
-
-1. **Interval-based RetinaFace detection** → reduces compute
-2. **MediaPipe FaceMesh landmarks** → precise alignment
-3. **Temporal smoothing** → jitter-free output
-4. **ROI cropping + padding** → reduces GPU load
-5. **FaceShifter Core FP16 engine** → high-quality face swap
-6. **Optional FOMM motion stabilization** → smooth head/eye/mouth motion
-7. **Adaptive blending + edge mask** → seamless compositing
-8. **Modular design** → can swap models, engines, or add new smoothing
-
----
