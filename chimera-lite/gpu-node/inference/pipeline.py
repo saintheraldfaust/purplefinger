@@ -30,7 +30,7 @@ STREAM_PROFILES = {
         'stale_face_ttl': 4,
         'proc_w': 448,
         'proc_h': 252,
-        'jpeg_quality': 80,
+        'jpeg_quality': 76,
     },
     'quality': {
         'enhance_enabled': True,
