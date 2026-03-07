@@ -56,7 +56,7 @@ let lastRecvFrames = 0;
 let lastSentAt = 0;
 let statsTimer = null;
 let currentProfile = 'realtime';
-let currentSendFps = 14;
+let currentSendFps = 16;
 let currentSendQuality = 0.68;
 let currentSendW = 448;
 let currentSendH = 252;
@@ -64,10 +64,10 @@ let currentSendH = 252;
 const STREAM_PROFILES = {
   realtime: {
     label: 'Realtime',
-    sendFps: 14,
-    minFps: 10,
-    headroom: 1,
-    quality: 0.70,
+    sendFps: 16,
+    minFps: 12,
+    headroom: 2,
+    quality: 0.64,
     width: 448,
     height: 252,
     summary: 'Realtime mode uses lighter processing, lower working resolution, and no enhancement for the smoothest motion.',
