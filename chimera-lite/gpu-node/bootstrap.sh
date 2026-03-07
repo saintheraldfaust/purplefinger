@@ -41,9 +41,7 @@ $PIP install --quiet --cache-dir "$WORKSPACE/.cache/pip" \
   basicsr \
   facexlib \
   gfpgan \
-  realesrgan \
-  transformers \
-  accelerate
+  realesrgan
 
 # Fix basicsr compatibility with torchvision >= 0.16
 $PYTHON - <<'PYEOF'
