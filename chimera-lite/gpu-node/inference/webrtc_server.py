@@ -46,10 +46,6 @@ _fps_frame_count = 0
 _fps_window_start = 0.0
 
 
-# Processing resolution — lower = faster detection/swap, same quality for webcam faces
-_PROC_W, _PROC_H = 480, 270
-
-
 # --- WebSocket stream handler ---
 async def handle_ws(request):
     global _fps_frame_count, _fps_window_start
@@ -74,9 +70,14 @@ async def handle_ws(request):
                 continue
             latest[0] = None
 
+            runtime = pipeline.get_runtime_settings()
+            proc_w = runtime['proc_w']
+            proc_h = runtime['proc_h']
+            jpeg_quality = runtime['jpeg_quality']
+
             h, w = img.shape[:2]
-            if w != _PROC_W or h != _PROC_H:
-                small = cv2.resize(img, (_PROC_W, _PROC_H), interpolation=cv2.INTER_LINEAR)
+            if w != proc_w or h != proc_h:
+                small = cv2.resize(img, (proc_w, proc_h), interpolation=cv2.INTER_LINEAR)
             else:
                 small = img
 
@@ -84,9 +85,9 @@ async def handle_ws(request):
                 t0 = time.perf_counter()
                 swapped_small = await asyncio.to_thread(pipeline.process_frame, small)
                 frame_ms = (time.perf_counter() - t0) * 1000
-                out = swapped_small if (w == _PROC_W and h == _PROC_H) else \
+                out = swapped_small if (w == proc_w and h == proc_h) else \
                     cv2.resize(swapped_small, (w, h), interpolation=cv2.INTER_LINEAR)
-                _, buf = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                _, buf = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
             except Exception as e:
                 log.warning('Frame error: %s', e)
                 continue
@@ -148,9 +149,27 @@ async def handle_set_face(request):
     return web.json_response({'ok': True})
 
 
+async def handle_set_mode(request):
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({'error': 'Invalid JSON'}, status=400)
+
+    profile = data.get('profile')
+    if not isinstance(profile, str):
+        return web.json_response({'error': 'Missing profile'}, status=400)
+
+    try:
+        pipeline.set_profile(profile)
+    except ValueError as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+    return web.json_response({'ok': True, 'profile': pipeline.profile})
+
+
 # --- Health ---
 async def handle_health(request):
-    return web.json_response({'ok': True, 'face_set': pipeline.ready})
+    return web.json_response({'ok': True, 'face_set': pipeline.ready, 'profile': pipeline.profile})
 
 
 # --- App setup ---
@@ -163,6 +182,7 @@ def build_app():
 
     cors.add(app.router.add_get('/ws', handle_ws))
     cors.add(app.router.add_post('/set-face', handle_set_face))
+    cors.add(app.router.add_post('/set-mode', handle_set_mode))
     cors.add(app.router.add_get('/health', handle_health))
 
     return app

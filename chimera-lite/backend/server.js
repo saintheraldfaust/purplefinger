@@ -15,6 +15,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 // --- Session State ---
 let activeSession = null; // { podId, endpoint: { ip, port }, timeoutHandle }
 let uploadedFaceBuffer = null;
+let streamProfile = 'realtime';
 
 // --- Auth Middleware ---
 function requireToken(req, res, next) {
@@ -33,9 +34,9 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 // GET /status
 app.get('/status', requireToken, (req, res) => {
   if (!activeSession) {
-    return res.json({ active: false });
+    return res.json({ active: false, streamProfile });
   }
-  res.json({ active: true, podId: activeSession.podId, endpoint: activeSession.endpoint });
+  res.json({ active: true, podId: activeSession.podId, endpoint: activeSession.endpoint, streamProfile });
 });
 
 // POST /start — provision GPU pod
@@ -69,6 +70,7 @@ app.post('/start', requireToken, async (req, res) => {
       .then(async () => {
         if (activeSession) activeSession.serverReady = true;
         console.log('Inference server ready.');
+        await forwardProfileToGpu(endpoint, streamProfile).catch(console.error);
         if (uploadedFaceBuffer) {
           await forwardFaceToGpu(endpoint, uploadedFaceBuffer).catch(console.error);
         }
@@ -95,10 +97,37 @@ app.get('/ready', requireToken, async (req, res) => {
       if (uploadedFaceBuffer) {
         forwardFaceToGpu(activeSession.endpoint, uploadedFaceBuffer).catch(console.error);
       }
+      forwardProfileToGpu(activeSession.endpoint, streamProfile).catch(console.error);
       return res.json({ ready: true });
     }
   } catch (_) {}
   res.json({ ready: false, reason: 'starting' });
+});
+
+// GET /stream-profile
+app.get('/stream-profile', requireToken, (req, res) => {
+  res.json({ profile: streamProfile });
+});
+
+// POST /stream-profile
+app.post('/stream-profile', requireToken, async (req, res) => {
+  const profile = String(req.body?.profile || '').trim().toLowerCase();
+  if (!['realtime', 'quality'].includes(profile)) {
+    return res.status(400).json({ error: 'Invalid profile' });
+  }
+
+  streamProfile = profile;
+
+  if (activeSession && activeSession.serverReady) {
+    try {
+      await forwardProfileToGpu(activeSession.endpoint, streamProfile);
+    } catch (err) {
+      console.error('Failed to forward stream profile to GPU:', err.message);
+      return res.status(502).json({ error: 'Stored locally but failed to forward to GPU' });
+    }
+  }
+
+  res.json({ ok: true, profile: streamProfile, forwarded: !!(activeSession && activeSession.serverReady) });
 });
 
 // POST /stop — destroy GPU pod
@@ -171,6 +200,13 @@ async function forwardFaceToGpu(endpoint, buffer) {
   await axios.post(`http://${endpoint.ip}:${endpoint.port}/set-face`, form, {
     headers: form.getHeaders(),
     timeout: 15000,
+  });
+}
+
+async function forwardProfileToGpu(endpoint, profile) {
+  await axios.post(`http://${endpoint.ip}:${endpoint.port}/set-mode`, { profile }, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 10000,
   });
 }
 

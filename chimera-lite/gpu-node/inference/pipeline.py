@@ -21,11 +21,36 @@ class PipelineConfig:
     DEVICE = 'cuda:0'
 
 
+STREAM_PROFILES = {
+    'realtime': {
+        'enhance_enabled': False,
+        'enhance_every_n': 0,
+        'detect_every_n': 2,
+        'smooth_alpha': 0.45,
+        'stale_face_ttl': 4,
+        'proc_w': 448,
+        'proc_h': 252,
+        'jpeg_quality': 80,
+    },
+    'quality': {
+        'enhance_enabled': True,
+        'enhance_every_n': 4,
+        'detect_every_n': 1,
+        'smooth_alpha': 0.75,
+        'stale_face_ttl': 1,
+        'proc_w': 480,
+        'proc_h': 270,
+        'jpeg_quality': 85,
+    },
+}
+
+
 class FaceSwapPipeline:
 
     def __init__(self, config: PipelineConfig = None):
         self.config = config or PipelineConfig()
         self._frame_idx = 0
+        self.profile = 'realtime'
 
         log.info('Initialising SwapEngine...')
         self.swap = SwapEngine('models/inswapper_128.onnx')
@@ -46,6 +71,23 @@ class FaceSwapPipeline:
         self.swap.set_identity(image)
         log.info('Identity set — pipeline ready')
 
+    def set_profile(self, profile: str):
+        profile = (profile or '').strip().lower()
+        if profile not in STREAM_PROFILES:
+            raise ValueError(f'Unsupported profile: {profile}')
+        self.profile = profile
+        self.swap.set_detect_every_n(STREAM_PROFILES[profile]['detect_every_n'])
+        self.swap.set_tracking_config(
+            STREAM_PROFILES[profile]['smooth_alpha'],
+            STREAM_PROFILES[profile]['stale_face_ttl'],
+        )
+        if self.enhance is not None:
+            self.enhance.ENHANCE_EVERY_N = STREAM_PROFILES[profile]['enhance_every_n']
+        log.info('Stream profile set: %s', profile)
+
+    def get_runtime_settings(self):
+        return STREAM_PROFILES[self.profile].copy()
+
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         if not self.ready:
             return frame
@@ -57,8 +99,14 @@ class FaceSwapPipeline:
         swap_ms = (time.perf_counter() - t0) * 1000
 
         enhance_ms = 0
-        if self.enhance is not None and self.swap._cached_target_faces:
-            if self._frame_idx % self.enhance.ENHANCE_EVERY_N == 0:
+        profile_cfg = STREAM_PROFILES[self.profile]
+        if (
+            profile_cfg['enhance_enabled'] and
+            self.enhance is not None and
+            self.swap._cached_target_faces and
+            self.enhance.ENHANCE_EVERY_N > 0 and
+            self._frame_idx % self.enhance.ENHANCE_EVERY_N == 0
+        ):
                 t1 = time.perf_counter()
                 for face in self.swap._cached_target_faces:
                     try:

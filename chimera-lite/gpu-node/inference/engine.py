@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import torch
 import logging
+import copy
 
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True  # speed up conv ops after first frame
@@ -30,7 +31,7 @@ class SwapEngine:
       - InsightFace buffalo_l       (auto-downloaded on first run to ~/.insightface/)
     """
 
-    DETECT_EVERY_N = 1   # detect every frame — mouth moves too fast for stale landmarks
+    DETECT_EVERY_N = 1   # per-profile; realtime can relax this for more FPS
 
     def __init__(self, model_path: str = 'models/inswapper_128.onnx'):
         import insightface
@@ -55,6 +56,48 @@ class SwapEngine:
         self._source_img  = None
         self._cached_target_faces = []   # faces detected in last detection frame
         self._frame_idx = 0
+        self._smooth_alpha = 1.0
+        self._stale_face_ttl = 0
+        self._miss_count = 0
+        self._smoothed_bbox = None
+        self._smoothed_kps = None
+        self._smoothed_lmk106 = None
+
+    def set_detect_every_n(self, n: int):
+        self.DETECT_EVERY_N = max(1, int(n))
+        log.info('Swap detect cadence set: every %d frame(s)', self.DETECT_EVERY_N)
+
+    def set_tracking_config(self, smooth_alpha: float = 1.0, stale_face_ttl: int = 0):
+        self._smooth_alpha = float(np.clip(smooth_alpha, 0.0, 1.0))
+        self._stale_face_ttl = max(0, int(stale_face_ttl))
+        log.info(
+            'Swap tracking config: smooth_alpha=%.2f stale_face_ttl=%d',
+            self._smooth_alpha,
+            self._stale_face_ttl,
+        )
+
+    def _smooth_array(self, prev, curr):
+        curr = np.asarray(curr, dtype=np.float32)
+        if prev is None or self._smooth_alpha >= 0.999:
+            return curr
+        return self._smooth_alpha * curr + (1.0 - self._smooth_alpha) * prev
+
+    def _build_tracked_face(self, face):
+        tracked = copy.copy(face)
+        tracked.bbox = self._smooth_array(self._smoothed_bbox, face.bbox)
+        self._smoothed_bbox = tracked.bbox.copy()
+
+        kps = getattr(face, 'kps', None)
+        if kps is not None:
+            tracked.kps = self._smooth_array(self._smoothed_kps, kps)
+            self._smoothed_kps = tracked.kps.copy()
+
+        lmk = getattr(face, 'landmark_2d_106', None)
+        if lmk is not None:
+            tracked.landmark_2d_106 = self._smooth_array(self._smoothed_lmk106, lmk)
+            self._smoothed_lmk106 = tracked.landmark_2d_106.copy()
+
+        return tracked
 
     def set_identity(self, image: np.ndarray):
         """Extract and cache the source face embedding from the identity image."""
@@ -73,11 +116,26 @@ class SwapEngine:
 
         self._frame_idx += 1
 
-        # Detect every frame — mouth/jaw move too much between frames for
-        # stale landmarks to produce a correct alignment crop.
-        faces = self.app.get(frame)
-        if faces:
-            self._cached_target_faces = faces
+        # Realtime mode can skip every other detection to save GPU time.
+        # If no cached face exists yet, always detect immediately.
+        should_detect = (
+            not self._cached_target_faces or
+            self.DETECT_EVERY_N <= 1 or
+            (self._frame_idx % self.DETECT_EVERY_N) == 1
+        )
+        if should_detect:
+            faces = self.app.get(frame)
+            if faces:
+                primary = sorted(faces, key=lambda f: f.bbox[2] - f.bbox[0], reverse=True)[0]
+                self._cached_target_faces = [self._build_tracked_face(primary)]
+                self._miss_count = 0
+            else:
+                self._miss_count += 1
+                if self._miss_count > self._stale_face_ttl:
+                    self._cached_target_faces = []
+                    self._smoothed_bbox = None
+                    self._smoothed_kps = None
+                    self._smoothed_lmk106 = None
 
         if not self._cached_target_faces:
             return frame

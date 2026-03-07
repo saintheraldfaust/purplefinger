@@ -71,13 +71,20 @@ let mainWindow;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 520,
+    width: 1440,
     height: 900,
-    resizable: false,
+    minWidth: 1180,
+    minHeight: 760,
+    autoHideMenuBar: true,
+    backgroundColor: '#050816',
+    fullscreen: true,
+    fullscreenable: true,
+    resizable: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false,
     },
   });
 
@@ -119,6 +126,16 @@ ipcMain.handle('check-ready', async () => {
 
 ipcMain.handle('stop-session', async () => {
   const res = await axios.post(`${BACKEND_URL}/stop`, {}, { headers });
+  return res.data;
+});
+
+ipcMain.handle('get-stream-profile', async () => {
+  const res = await axios.get(`${BACKEND_URL}/stream-profile`, { headers });
+  return res.data;
+});
+
+ipcMain.handle('set-stream-profile', async (_event, profile) => {
+  const res = await axios.post(`${BACKEND_URL}/stream-profile`, { profile }, { headers });
   return res.data;
 });
 
