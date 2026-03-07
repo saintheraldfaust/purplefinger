@@ -98,10 +98,18 @@ async function startStreaming(ip, port) {
 
   ws.onmessage = (event) => {
     const blob = new Blob([event.data], { type: 'image/jpeg' });
+
+    // Display in the Electron window
     createImageBitmap(blob).then((bitmap) => {
       displayCtx.drawImage(bitmap, 0, 0, displayCanvas.width, displayCanvas.height);
       bitmap.close();
     });
+
+    // Push to OBS Browser Source (localhost:7891) via main process
+    // OBS captures your real mic separately — no audio work needed here
+    const reader = new FileReader();
+    reader.onload = () => window.chimera.obsFrame(reader.result);
+    reader.readAsDataURL(blob);
   };
 
   ws.onerror = () => setLog('Stream error — check GPU pod');

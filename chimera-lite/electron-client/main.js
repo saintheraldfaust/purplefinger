@@ -1,11 +1,71 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const axios = require('axios');
+const http = require('http');
 
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 const API_TOKEN = process.env.API_TOKEN || 'kdieoqwiasmsoalkw';
+const OBS_PORT = 7891;
 
 const headers = { 'x-api-token': API_TOKEN };
+
+// ---------------------------------------------------------------------------
+// OBS Browser Source server
+// Serves a self-updating canvas page at http://localhost:7891
+// Add this as a Browser Source in OBS (640x360, no audio).
+// OBS captures your real mic separately — no audio processing needed here.
+// ---------------------------------------------------------------------------
+const obsClients = new Set(); // active SSE connections
+
+const obsServer = http.createServer((req, res) => {
+  if (req.url === '/stream') {
+    // SSE endpoint — OBS page connects here to receive JPEG data-URLs
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.write(':ok\n\n'); // initial ping
+    obsClients.add(res);
+    req.on('close', () => obsClients.delete(res));
+    return;
+  }
+
+  // Root — serve the canvas page OBS loads
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; background:#000; }
+  canvas { display:block; width:100vw; height:100vh; object-fit:contain; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const es = new EventSource('/stream');
+es.addEventListener('frame', (e) => {
+  const img = new Image();
+  img.onload = () => {
+    canvas.width  = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    ctx.drawImage(img, 0, 0);
+  };
+  img.src = e.data;
+});
+</script>
+</body>
+</html>`);
+});
+
+obsServer.listen(OBS_PORT, '127.0.0.1', () => {
+  console.log(`[OBS] Browser Source ready → http://localhost:${OBS_PORT}`);
+});
 
 let mainWindow;
 
@@ -70,4 +130,13 @@ ipcMain.handle('upload-face', async (_event, buffer, filename) => {
     headers: { ...headers, ...form.getHeaders() },
   });
   return res.data;
+});
+
+// Renderer sends each swapped JPEG blob as a data-URL; we push it to OBS clients
+ipcMain.on('obs-frame', (_event, dataUrl) => {
+  if (obsClients.size === 0) return;
+  const msg = `event: frame\ndata: ${dataUrl}\n\n`;
+  for (const client of obsClients) {
+    try { client.write(msg); } catch { obsClients.delete(client); }
+  }
 });
