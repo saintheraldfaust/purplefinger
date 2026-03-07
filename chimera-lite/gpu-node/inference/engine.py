@@ -9,7 +9,6 @@ import cv2
 import numpy as np
 import torch
 import logging
-import copy
 
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True  # speed up conv ops after first frame
@@ -83,21 +82,20 @@ class SwapEngine:
         return self._smooth_alpha * curr + (1.0 - self._smooth_alpha) * prev
 
     def _build_tracked_face(self, face):
-        tracked = copy.copy(face)
-        tracked.bbox = self._smooth_array(self._smoothed_bbox, face.bbox)
-        self._smoothed_bbox = tracked.bbox.copy()
+        face.bbox = self._smooth_array(self._smoothed_bbox, face.bbox)
+        self._smoothed_bbox = face.bbox.copy()
 
         kps = getattr(face, 'kps', None)
         if kps is not None:
-            tracked.kps = self._smooth_array(self._smoothed_kps, kps)
-            self._smoothed_kps = tracked.kps.copy()
+            face.kps = self._smooth_array(self._smoothed_kps, kps)
+            self._smoothed_kps = face.kps.copy()
 
         lmk = getattr(face, 'landmark_2d_106', None)
         if lmk is not None:
-            tracked.landmark_2d_106 = self._smooth_array(self._smoothed_lmk106, lmk)
-            self._smoothed_lmk106 = tracked.landmark_2d_106.copy()
+            face.landmark_2d_106 = self._smooth_array(self._smoothed_lmk106, lmk)
+            self._smoothed_lmk106 = face.landmark_2d_106.copy()
 
-        return tracked
+        return face
 
     def set_identity(self, image: np.ndarray):
         """Extract and cache the source face embedding from the identity image."""
