@@ -1,7 +1,6 @@
 const btnUpload       = document.getElementById('btn-upload');
 const btnStart        = document.getElementById('btn-start');
 const btnStop         = document.getElementById('btn-stop');
-const btnFullscreen   = document.getElementById('btn-fullscreen');
 const btnResetPreview = document.getElementById('btn-reset-preview');
 const btnModeRealtime = document.getElementById('btn-mode-realtime');
 const btnModeQuality  = document.getElementById('btn-mode-quality');
@@ -12,6 +11,10 @@ const log             = document.getElementById('log');
 const localVideo      = document.getElementById('local-video');
 const remoteCanvas    = document.getElementById('remote-canvas');
 const videoEmpty      = document.getElementById('video-empty');
+const launchOverlay   = document.getElementById('launch-overlay');
+const launchStatus    = document.getElementById('launch-status');
+const launchLines     = Array.from(document.querySelectorAll('.launch-line'));
+const launchTexts     = Array.from(document.querySelectorAll('.launch-text'));
 
 const ctrlBrightness  = document.getElementById('ctrl-brightness');
 const ctrlContrast    = document.getElementById('ctrl-contrast');
@@ -43,6 +46,48 @@ function setLoading(loading) {
   btnStart.disabled = loading;
   btnStop.disabled = loading;
   btnUpload.disabled = loading;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function typeLaunchText(el, text, speed = 180) {
+  el.textContent = '';
+  for (let i = 0; i < text.length; i++) {
+    el.textContent += text[i];
+    await sleep(speed);
+  }
+  el.classList.add('done');
+}
+
+async function runLaunchSequence() {
+  if (!launchOverlay) return;
+
+  launchStatus.textContent = 'Initializing live face swap interface...';
+  launchTexts.forEach((el) => {
+    el.textContent = '';
+    el.classList.remove('done');
+  });
+
+  launchLines.forEach((line) => line.classList.remove('visible'));
+
+  await sleep(1400);
+
+  for (let i = 0; i < launchLines.length; i++) {
+    const line = launchLines[i];
+    const textEl = launchTexts[i];
+    const text = textEl.dataset.text || '';
+    line.classList.add('visible');
+    launchStatus.textContent = `Bootstrapping ${text}...`;
+    await sleep(900);
+    await typeLaunchText(textEl, text, i === 0 ? 220 : i === 1 ? 185 : 170);
+    await sleep(i === launchLines.length - 1 ? 2200 : 1400);
+  }
+
+  launchStatus.textContent = 'Interface ready.';
+  await sleep(4200);
+  launchOverlay.classList.add('hidden');
 }
 
 let fBrightness = 1;
@@ -242,16 +287,6 @@ btnResetPreview.addEventListener('click', () => setPreviewDefaults());
 btnModeRealtime.addEventListener('click', () => setProfile('realtime'));
 btnModeQuality.addEventListener('click', () => setProfile('quality'));
 
-btnFullscreen.addEventListener('click', async () => {
-  if (!document.fullscreenElement) {
-    await document.documentElement.requestFullscreen();
-    btnFullscreen.textContent = 'Exit Fullscreen';
-  } else {
-    await document.exitFullscreen();
-    btnFullscreen.textContent = 'Fullscreen';
-  }
-});
-
 // --- WebSocket stream state ---
 let ws           = null;
 let localStream  = null;
@@ -439,6 +474,7 @@ btnStop.addEventListener('click', async () => {
 
 // --- Init: reconnect to existing session ---
 (async () => {
+  runLaunchSequence().catch(() => {});
   setPreviewDefaults();
   try {
     const profileData = await window.chimera.getStreamProfile();

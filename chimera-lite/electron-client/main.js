@@ -77,7 +77,6 @@ function createWindow() {
     minHeight: 760,
     autoHideMenuBar: true,
     backgroundColor: '#050816',
-    fullscreen: true,
     fullscreenable: true,
     resizable: true,
     webPreferences: {
