@@ -97,6 +97,121 @@ class SwapEngine:
 
         return face
 
+    def _build_face_mask(self, face, h, w):
+        mask = np.zeros((h, w), dtype=np.uint8)
+        lmk = getattr(face, 'landmark_2d_106', None)
+        if lmk is not None:
+            contour = lmk[:33].astype(np.int32)
+            cv2.fillPoly(mask, [cv2.convexHull(contour)], 255)
+        else:
+            x1, y1, x2, y2 = face.bbox.astype(int)
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            cv2.ellipse(mask, (cx, cy),
+                        (max(1, (x2 - x1) // 2), max(1, (y2 - y1) // 2)),
+                        0, 0, 360, 255, -1)
+        return mask
+
+    def _refine_skin_mask(self, mask, bbox, kps=None):
+        x1, y1, x2, y2 = np.asarray(bbox, dtype=np.int32)
+        bw = max(1, x2 - x1)
+        bh = max(1, y2 - y1)
+        k = max(5, int(round(min(bw, bh) * 0.12)))
+        if k % 2 == 0:
+            k += 1
+        kernel = np.ones((k, k), dtype=np.uint8)
+        refined = cv2.erode(mask, kernel, iterations=1)
+
+        if kps is not None and len(kps) >= 5:
+            for idx in (0, 1):
+                ex, ey = np.asarray(kps[idx], dtype=np.int32)
+                r = max(3, int(round(bw * 0.10)))
+                cv2.circle(refined, (int(ex), int(ey)), r, 0, -1)
+
+            ml = np.asarray(kps[3], dtype=np.float32)
+            mr = np.asarray(kps[4], dtype=np.float32)
+            mouth_w = max(4.0, float(np.linalg.norm(mr - ml)))
+            mx = int(round((ml[0] + mr[0]) * 0.5))
+            my = int(round((ml[1] + mr[1]) * 0.5))
+            cv2.ellipse(
+                refined,
+                (mx, my),
+                (max(3, int(round(mouth_w * 0.42))), max(3, int(round(mouth_w * 0.24)))),
+                0, 0, 360, 0, -1,
+            )
+
+        return refined
+
+    def _match_face_tone(self, swapped, face, face_mask):
+        if self._source_face is None or self._source_img is None:
+            return swapped
+
+        x1, y1, x2, y2 = face.bbox.astype(int)
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(swapped.shape[1], x2)
+        y2 = min(swapped.shape[0], y2)
+        if x2 - x1 < 12 or y2 - y1 < 12:
+            return swapped
+
+        target_mask = self._refine_skin_mask(face_mask.copy(), face.bbox, getattr(face, 'kps', None))
+        region = target_mask[y1:y2, x1:x2] > 0
+        if int(region.sum()) < 64:
+            return swapped
+
+        src_h, src_w = self._source_img.shape[:2]
+        source_mask = self._build_face_mask(self._source_face, src_h, src_w)
+        source_mask = self._refine_skin_mask(source_mask, self._source_face.bbox, getattr(self._source_face, 'kps', None))
+
+        sx1, sy1, sx2, sy2 = self._source_face.bbox.astype(int)
+        sx1 = max(0, sx1)
+        sy1 = max(0, sy1)
+        sx2 = min(src_w, sx2)
+        sy2 = min(src_h, sy2)
+        if sx2 - sx1 < 12 or sy2 - sy1 < 12:
+            return swapped
+
+        swapped_roi = swapped[y1:y2, x1:x2]
+        source_roi = self._source_img[sy1:sy2, sx1:sx2]
+        source_region = source_mask[sy1:sy2, sx1:sx2] > 0
+        if int(source_region.sum()) < 64:
+            return swapped
+
+        swapped_lab = cv2.cvtColor(swapped_roi, cv2.COLOR_BGR2LAB).astype(np.float32)
+        source_lab = cv2.cvtColor(source_roi, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+        adjusted_lab = swapped_lab.copy()
+        for ch in range(3):
+            src_vals = swapped_lab[:, :, ch][region]
+            dst_vals = source_lab[:, :, ch][source_region]
+            src_mean = float(src_vals.mean())
+            dst_mean = float(dst_vals.mean())
+            src_std = float(src_vals.std())
+            dst_std = float(dst_vals.std())
+
+            scale = dst_std / max(src_std, 1.0)
+            if ch == 0:
+                scale = float(np.clip(scale, 0.90, 1.10))
+            else:
+                scale = float(np.clip(scale, 0.85, 1.18))
+
+            channel = (swapped_lab[:, :, ch] - src_mean) * scale + dst_mean
+            if ch == 0:
+                delta = np.clip(channel - swapped_lab[:, :, ch], -16.0, 16.0)
+            else:
+                delta = np.clip(channel - swapped_lab[:, :, ch], -10.0, 10.0)
+            adjusted_lab[:, :, ch] = np.clip(swapped_lab[:, :, ch] + delta, 0.0, 255.0)
+
+        adjusted_roi = cv2.cvtColor(adjusted_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+        soft = cv2.GaussianBlur(target_mask.astype(np.float32) / 255.0, (31, 31), 8.0)[y1:y2, x1:x2]
+        soft = (soft * 0.78)[:, :, np.newaxis]
+
+        out = swapped.copy()
+        out[y1:y2, x1:x2] = (
+            adjusted_roi.astype(np.float32) * soft +
+            swapped_roi.astype(np.float32) * (1.0 - soft)
+        ).astype(np.uint8)
+        return out
+
     def set_identity(self, image: np.ndarray):
         """Extract and cache the source face embedding from the identity image."""
         faces = self.app.get(image)
@@ -146,19 +261,8 @@ class SwapEngine:
 
             # paste_back uses a hard internal mask that leaves a visible edge seam.
             # Re-blend with a wide Gaussian feather so the transition is invisible.
-            mask = np.zeros((h, w), dtype=np.uint8)
-            lmk = getattr(face, 'landmark_2d_106', None)
-            if lmk is not None:
-                # Points 0-32 trace the full face contour (jaw + temples)
-                contour = lmk[:33].astype(np.int32)
-                cv2.fillPoly(mask, [cv2.convexHull(contour)], 255)
-            else:
-                # Fallback: filled ellipse from detection bbox
-                x1, y1, x2, y2 = face.bbox.astype(int)
-                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                cv2.ellipse(mask, (cx, cy),
-                            (max(1, (x2 - x1) // 2), max(1, (y2 - y1) // 2)),
-                            0, 0, 360, 255, -1)
+            mask = self._build_face_mask(face, h, w)
+            swapped = self._match_face_tone(swapped, face, mask)
 
             # Wide Gaussian feather — face center is fully swapped,
             # edges fade softly into the original background
