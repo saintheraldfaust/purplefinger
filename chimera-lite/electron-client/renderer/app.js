@@ -101,10 +101,10 @@ let lastRecvFrames = 0;
 let lastSentAt = 0;
 let statsTimer = null;
 let currentProfile = 'realtime';
-let currentSendFps = 14;
-let currentSendQuality = 0.70;
-let currentSendW = 544;
-let currentSendH = 306;
+let currentSendFps = 12;
+let currentSendQuality = 0.68;
+let currentSendW = 512;
+let currentSendH = 288;
 let lightProbe = null;
 let lightProbeCtx = null;
 let currentCaptureFilter = 'none';
@@ -113,13 +113,13 @@ let lastLightProbeAt = 0;
 const STREAM_PROFILES = {
   realtime: {
     label: 'Realtime',
-    sendFps: 14,
-    minFps: 10,
+    sendFps: 12,
+    minFps: 9,
     headroom: 1,
-    quality: 0.70,
-    width: 544,
-    height: 306,
-    summary: 'Realtime mode stays responsive with a balanced resolution bump, full-rate detection, and mild low-light compensation.',
+    quality: 0.68,
+    width: 512,
+    height: 288,
+    summary: 'Realtime mode prioritizes smoother motion with balanced detail, full-rate detection, and mild low-light compensation.',
   },
   quality: {
     label: 'Quality',
