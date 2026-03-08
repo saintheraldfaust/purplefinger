@@ -62,6 +62,7 @@ class SwapEngine:
         self._smoothed_kps = None
         self._smoothed_lmk106 = None
         self._source_skin_stats = None
+        self._source_skin_zone_stats = None
 
     def set_detect_every_n(self, n: int):
         self.DETECT_EVERY_N = max(1, int(n))
@@ -193,6 +194,70 @@ class SwapEngine:
             stats.append((float(vals.mean()), float(vals.std())))
         return stats
 
+    def _compute_vertical_zone_stats(self, image, mask, bbox, fallback_stats=None):
+        if image is None or mask is None:
+            return fallback_stats
+
+        x1, y1, x2, y2 = np.asarray(bbox, dtype=np.int32)
+        h, w = image.shape[:2]
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(w, x2)
+        y2 = min(h, y2)
+        if x2 - x1 < 12 or y2 - y1 < 12:
+            return fallback_stats
+
+        roi = image[y1:y2, x1:x2]
+        roi_mask = mask[y1:y2, x1:x2] > 0
+        if int(roi_mask.sum()) < 64:
+            return fallback_stats
+
+        roi_lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB).astype(np.float32)
+        norm_y = np.linspace(0.0, 1.0, roi.shape[0], dtype=np.float32)[:, np.newaxis]
+        zone_ranges = [(0.00, 0.38), (0.26, 0.72), (0.60, 1.00)]
+        zone_stats = []
+
+        for idx, (lo, hi) in enumerate(zone_ranges):
+            zone_mask = roi_mask & (norm_y >= lo) & (norm_y <= hi)
+            if int(zone_mask.sum()) < 48:
+                zone_stats.append(fallback_stats[idx] if fallback_stats is not None else None)
+                continue
+
+            channel_stats = []
+            for ch in range(3):
+                vals = roi_lab[:, :, ch][zone_mask]
+                channel_stats.append((float(vals.mean()), float(vals.std())))
+            zone_stats.append(channel_stats)
+
+        return zone_stats
+
+    def _build_vertical_stat_maps(self, roi_h, roi_w):
+        if not self._source_skin_zone_stats:
+            return None, None
+
+        norm_y = np.linspace(0.0, 1.0, roi_h, dtype=np.float32)[:, np.newaxis]
+        centers = np.array([0.18, 0.50, 0.82], dtype=np.float32)
+        widths = np.array([0.18, 0.18, 0.16], dtype=np.float32)
+        weights = []
+        for center, width in zip(centers, widths):
+            w = np.exp(-0.5 * ((norm_y - center) / max(width, 1e-4)) ** 2)
+            weights.append(w)
+        weights = np.stack(weights, axis=2)
+        weights_sum = np.clip(weights.sum(axis=2, keepdims=True), 1e-6, None)
+        weights = weights / weights_sum
+
+        mean_maps = []
+        std_maps = []
+        for ch in range(3):
+            zone_means = np.array([self._source_skin_zone_stats[idx][ch][0] for idx in range(3)], dtype=np.float32)
+            zone_stds = np.array([self._source_skin_zone_stats[idx][ch][1] for idx in range(3)], dtype=np.float32)
+            mean_map = (weights * zone_means.reshape(1, 1, 3)).sum(axis=2)
+            std_map = (weights * zone_stds.reshape(1, 1, 3)).sum(axis=2)
+            mean_maps.append(np.repeat(mean_map, roi_w, axis=1))
+            std_maps.append(np.repeat(std_map, roi_w, axis=1))
+
+        return mean_maps, std_maps
+
     def _build_perimeter_falloff(self, mask, bbox):
         x1, y1, x2, y2 = np.asarray(bbox, dtype=np.int32)
         bw = max(1, x2 - x1)
@@ -246,19 +311,25 @@ class SwapEngine:
         swapped_roi = swapped[y1:y2, x1:x2]
 
         swapped_lab = cv2.cvtColor(swapped_roi, cv2.COLOR_BGR2LAB).astype(np.float32)
+        dst_mean_maps, dst_std_maps = self._build_vertical_stat_maps(swapped_roi.shape[0], swapped_roi.shape[1])
 
         adjusted_lab = swapped_lab.copy()
         for ch in range(3):
             src_vals = swapped_lab[:, :, ch][region]
             src_mean = float(src_vals.mean())
             src_std = float(src_vals.std())
-            dst_mean, dst_std = self._source_skin_stats[ch]
+            if dst_mean_maps is not None and dst_std_maps is not None:
+                dst_mean = dst_mean_maps[ch]
+                dst_std = dst_std_maps[ch]
+            else:
+                dst_mean = self._source_skin_stats[ch][0]
+                dst_std = self._source_skin_stats[ch][1]
 
             scale = dst_std / max(src_std, 1.0)
             if ch == 0:
-                scale = float(np.clip(scale, 0.82, 1.30))
+                scale = np.clip(scale, 0.82, 1.30)
             else:
-                scale = float(np.clip(scale, 0.76, 1.45))
+                scale = np.clip(scale, 0.76, 1.45)
 
             channel = (swapped_lab[:, :, ch] - src_mean) * scale + dst_mean
             if ch == 0:
@@ -290,6 +361,12 @@ class SwapEngine:
         source_mask = self._build_complexion_mask(self._source_face, src_h, src_w)
         source_mask = self._refine_skin_mask(source_mask, self._source_face.bbox, getattr(self._source_face, 'kps', None))
         self._source_skin_stats = self._compute_masked_lab_stats(self._source_img, source_mask)
+        self._source_skin_zone_stats = self._compute_vertical_zone_stats(
+            self._source_img,
+            source_mask,
+            self._source_face.bbox,
+            fallback_stats=[self._source_skin_stats, self._source_skin_stats, self._source_skin_stats] if self._source_skin_stats is not None else None,
+        )
         log.info('Identity face set (embedding shape: %s)', self._source_face.embedding.shape)
 
     def swap_frame(self, frame: np.ndarray) -> np.ndarray:
