@@ -193,6 +193,29 @@ class SwapEngine:
             stats.append((float(vals.mean()), float(vals.std())))
         return stats
 
+    def _build_perimeter_falloff(self, mask, bbox):
+        x1, y1, x2, y2 = np.asarray(bbox, dtype=np.int32)
+        bw = max(1, x2 - x1)
+        bh = max(1, y2 - y1)
+
+        binary = (mask > 0).astype(np.uint8)
+        dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+        edge_span = max(4.0, min(bw, bh) * 0.16)
+        falloff = np.clip(dist / edge_span, 0.0, 1.0)
+
+        # Hairline and ear sides need gentler influence than the mid-face.
+        yy, xx = np.mgrid[0:mask.shape[0], 0:mask.shape[1]]
+        cx = (x1 + x2) * 0.5
+        cy = (y1 + y2) * 0.5
+        rx = max(1.0, bw * 0.50)
+        ry = max(1.0, bh * 0.64)
+        ellipse = 1.0 - (((xx - cx) / rx) ** 2 + ((yy - (cy - bh * 0.02)) / ry) ** 2)
+        ellipse = np.clip(ellipse, 0.0, 1.0)
+
+        falloff = np.minimum(falloff, np.sqrt(ellipse))
+        falloff = cv2.GaussianBlur(falloff.astype(np.float32), (31, 31), 6.0)
+        return np.clip(falloff, 0.0, 1.0)
+
     def _match_face_tone(self, swapped, face, face_mask):
         if self._source_face is None or self._source_img is None or self._source_skin_stats is None:
             return swapped
@@ -235,7 +258,7 @@ class SwapEngine:
             adjusted_lab[:, :, ch] = np.clip(swapped_lab[:, :, ch] + delta, 0.0, 255.0)
 
         adjusted_roi = cv2.cvtColor(adjusted_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        soft = cv2.GaussianBlur(target_mask.astype(np.float32) / 255.0, (31, 31), 8.0)[y1:y2, x1:x2]
+        soft = self._build_perimeter_falloff(target_mask, face.bbox)[y1:y2, x1:x2]
         soft = (soft * 0.92)[:, :, np.newaxis]
 
         out = swapped.copy()
@@ -297,14 +320,18 @@ class SwapEngine:
             swapped = self.swapper.get(result, face, self._source_face, paste_back=True)
 
             # paste_back uses a hard internal mask that leaves a visible edge seam.
-            # Re-blend with a wide Gaussian feather so the transition is invisible.
-            mask = self._build_complexion_mask(face, h, w)
-            swapped = self._match_face_tone(swapped, face, mask)
+            # Use a broad complexion mask for tone transfer, but keep a tighter
+            # face-shaped mask for the final composite so the perimeter blends
+            # naturally around hairline, temples, ears, and jaw.
+            complexion_mask = self._build_complexion_mask(face, h, w)
+            swapped = self._match_face_tone(swapped, face, complexion_mask)
+
+            blend_mask = self._build_face_mask(face, h, w)
 
             # Wide Gaussian feather — face center is fully swapped,
             # edges fade softly into the original background
             mask_f = cv2.GaussianBlur(
-                mask.astype(np.float32) / 255.0, (51, 51), 14.0
+                blend_mask.astype(np.float32) / 255.0, (51, 51), 14.0
             )[:, :, np.newaxis]
 
             result = (
