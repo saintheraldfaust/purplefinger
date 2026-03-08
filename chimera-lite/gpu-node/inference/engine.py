@@ -200,8 +200,9 @@ class SwapEngine:
 
         binary = (mask > 0).astype(np.uint8)
         dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
-        edge_span = max(4.0, min(bw, bh) * 0.16)
+        edge_span = max(4.0, min(bw, bh) * 0.12)
         falloff = np.clip(dist / edge_span, 0.0, 1.0)
+        falloff = np.power(falloff, 0.65)
 
         # Hairline and ear sides need gentler influence than the mid-face.
         yy, xx = np.mgrid[0:mask.shape[0], 0:mask.shape[1]]
@@ -212,7 +213,16 @@ class SwapEngine:
         ellipse = 1.0 - (((xx - cx) / rx) ** 2 + ((yy - (cy - bh * 0.02)) / ry) ** 2)
         ellipse = np.clip(ellipse, 0.0, 1.0)
 
-        falloff = np.minimum(falloff, np.sqrt(ellipse))
+        shape_bias = np.clip(0.35 + 0.75 * np.sqrt(ellipse), 0.0, 1.0)
+        falloff = falloff * shape_bias
+
+        # Forehead needs stronger complexion retention than the side perimeter.
+        forehead_center_y = y1 + bh * 0.18
+        forehead = 1.0 - (((xx - cx) / max(1.0, bw * 0.34)) ** 2 + ((yy - forehead_center_y) / max(1.0, bh * 0.22)) ** 2)
+        forehead = np.clip(forehead, 0.0, 1.0)
+        forehead_boost = np.clip(0.55 + 0.55 * np.sqrt(forehead), 0.0, 1.0)
+        falloff = np.maximum(falloff, forehead_boost * binary.astype(np.float32) * 0.88)
+
         falloff = cv2.GaussianBlur(falloff.astype(np.float32), (31, 31), 6.0)
         return np.clip(falloff, 0.0, 1.0)
 
@@ -246,20 +256,20 @@ class SwapEngine:
 
             scale = dst_std / max(src_std, 1.0)
             if ch == 0:
-                scale = float(np.clip(scale, 0.85, 1.22))
+                scale = float(np.clip(scale, 0.82, 1.30))
             else:
-                scale = float(np.clip(scale, 0.80, 1.35))
+                scale = float(np.clip(scale, 0.76, 1.45))
 
             channel = (swapped_lab[:, :, ch] - src_mean) * scale + dst_mean
             if ch == 0:
-                delta = np.clip(channel - swapped_lab[:, :, ch], -28.0, 28.0)
+                delta = np.clip(channel - swapped_lab[:, :, ch], -36.0, 36.0)
             else:
-                delta = np.clip(channel - swapped_lab[:, :, ch], -18.0, 18.0)
+                delta = np.clip(channel - swapped_lab[:, :, ch], -24.0, 24.0)
             adjusted_lab[:, :, ch] = np.clip(swapped_lab[:, :, ch] + delta, 0.0, 255.0)
 
         adjusted_roi = cv2.cvtColor(adjusted_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
         soft = self._build_perimeter_falloff(target_mask, face.bbox)[y1:y2, x1:x2]
-        soft = (soft * 0.92)[:, :, np.newaxis]
+        soft = (soft * 0.97)[:, :, np.newaxis]
 
         out = swapped.copy()
         out[y1:y2, x1:x2] = (
