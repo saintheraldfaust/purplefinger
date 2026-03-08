@@ -112,11 +112,48 @@ class SwapEngine:
                         0, 0, 360, 255, -1)
         return mask
 
+    def _build_complexion_mask(self, face, h, w):
+        mask = self._build_face_mask(face, h, w)
+
+        x1, y1, x2, y2 = face.bbox.astype(int)
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(w, x2)
+        y2 = min(h, y2)
+        bw = max(1, x2 - x1)
+        bh = max(1, y2 - y1)
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+
+        # Broader ellipse so complexion transfer reaches forehead and jawline,
+        # not just the central face region.
+        cv2.ellipse(
+            mask,
+            (cx, int(round(cy - bh * 0.03))),
+            (max(1, int(round(bw * 0.54))), max(1, int(round(bh * 0.66)))),
+            0, 0, 360, 255, -1,
+        )
+
+        lmk = getattr(face, 'landmark_2d_106', None)
+        if lmk is not None and len(lmk) >= 33:
+            contour = lmk[:33].astype(np.int32)
+            left_temple = contour[0]
+            right_temple = contour[32]
+            forehead_poly = np.array([
+                left_temple,
+                right_temple,
+                [int(round(right_temple[0] + bw * 0.05)), max(0, int(round(y1 - bh * 0.24)))],
+                [int(round(left_temple[0] - bw * 0.05)), max(0, int(round(y1 - bh * 0.24)))],
+            ], dtype=np.int32)
+            cv2.fillConvexPoly(mask, forehead_poly, 255)
+
+        return mask
+
     def _refine_skin_mask(self, mask, bbox, kps=None):
         x1, y1, x2, y2 = np.asarray(bbox, dtype=np.int32)
         bw = max(1, x2 - x1)
         bh = max(1, y2 - y1)
-        k = max(5, int(round(min(bw, bh) * 0.08)))
+        k = max(3, int(round(min(bw, bh) * 0.05)))
         if k % 2 == 0:
             k += 1
         kernel = np.ones((k, k), dtype=np.uint8)
@@ -125,7 +162,7 @@ class SwapEngine:
         if kps is not None and len(kps) >= 5:
             for idx in (0, 1):
                 ex, ey = np.asarray(kps[idx], dtype=np.int32)
-                r = max(3, int(round(bw * 0.08)))
+                r = max(3, int(round(bw * 0.07)))
                 cv2.circle(refined, (int(ex), int(ey)), r, 0, -1)
 
             ml = np.asarray(kps[3], dtype=np.float32)
@@ -136,7 +173,7 @@ class SwapEngine:
             cv2.ellipse(
                 refined,
                 (mx, my),
-                (max(3, int(round(mouth_w * 0.42))), max(3, int(round(mouth_w * 0.24)))),
+                (max(3, int(round(mouth_w * 0.34))), max(3, int(round(mouth_w * 0.18)))),
                 0, 0, 360, 0, -1,
             )
 
@@ -217,7 +254,7 @@ class SwapEngine:
         self._source_face = sorted(faces, key=lambda f: f.bbox[2] - f.bbox[0], reverse=True)[0]
         self._source_img  = image.copy()
         src_h, src_w = self._source_img.shape[:2]
-        source_mask = self._build_face_mask(self._source_face, src_h, src_w)
+        source_mask = self._build_complexion_mask(self._source_face, src_h, src_w)
         source_mask = self._refine_skin_mask(source_mask, self._source_face.bbox, getattr(self._source_face, 'kps', None))
         self._source_skin_stats = self._compute_masked_lab_stats(self._source_img, source_mask)
         log.info('Identity face set (embedding shape: %s)', self._source_face.embedding.shape)
@@ -261,7 +298,7 @@ class SwapEngine:
 
             # paste_back uses a hard internal mask that leaves a visible edge seam.
             # Re-blend with a wide Gaussian feather so the transition is invisible.
-            mask = self._build_face_mask(face, h, w)
+            mask = self._build_complexion_mask(face, h, w)
             swapped = self._match_face_tone(swapped, face, mask)
 
             # Wide Gaussian feather — face center is fully swapped,
