@@ -28,9 +28,9 @@ STREAM_PROFILES = {
         'detect_every_n': 1,
         'smooth_alpha': 0.45,
         'stale_face_ttl': 4,
-        'proc_w': 544,
-        'proc_h': 306,
-        'jpeg_quality': 80,
+        'proc_w': 512,
+        'proc_h': 288,
+        'jpeg_quality': 76,
     },
     'quality': {
         'enhance_enabled': True,
