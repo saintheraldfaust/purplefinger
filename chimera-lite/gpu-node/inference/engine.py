@@ -61,6 +61,7 @@ class SwapEngine:
         self._smoothed_bbox = None
         self._smoothed_kps = None
         self._smoothed_lmk106 = None
+        self._source_skin_stats = None
 
     def set_detect_every_n(self, n: int):
         self.DETECT_EVERY_N = max(1, int(n))
@@ -115,7 +116,7 @@ class SwapEngine:
         x1, y1, x2, y2 = np.asarray(bbox, dtype=np.int32)
         bw = max(1, x2 - x1)
         bh = max(1, y2 - y1)
-        k = max(5, int(round(min(bw, bh) * 0.12)))
+        k = max(5, int(round(min(bw, bh) * 0.08)))
         if k % 2 == 0:
             k += 1
         kernel = np.ones((k, k), dtype=np.uint8)
@@ -124,7 +125,7 @@ class SwapEngine:
         if kps is not None and len(kps) >= 5:
             for idx in (0, 1):
                 ex, ey = np.asarray(kps[idx], dtype=np.int32)
-                r = max(3, int(round(bw * 0.10)))
+                r = max(3, int(round(bw * 0.08)))
                 cv2.circle(refined, (int(ex), int(ey)), r, 0, -1)
 
             ml = np.asarray(kps[3], dtype=np.float32)
@@ -141,8 +142,22 @@ class SwapEngine:
 
         return refined
 
+    def _compute_masked_lab_stats(self, image, mask):
+        if image is None or mask is None:
+            return None
+        region = mask > 0
+        if int(region.sum()) < 64:
+            return None
+
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        stats = []
+        for ch in range(3):
+            vals = lab[:, :, ch][region]
+            stats.append((float(vals.mean()), float(vals.std())))
+        return stats
+
     def _match_face_tone(self, swapped, face, face_mask):
-        if self._source_face is None or self._source_img is None:
+        if self._source_face is None or self._source_img is None or self._source_skin_stats is None:
             return swapped
 
         x1, y1, x2, y2 = face.bbox.astype(int)
@@ -158,52 +173,33 @@ class SwapEngine:
         if int(region.sum()) < 64:
             return swapped
 
-        src_h, src_w = self._source_img.shape[:2]
-        source_mask = self._build_face_mask(self._source_face, src_h, src_w)
-        source_mask = self._refine_skin_mask(source_mask, self._source_face.bbox, getattr(self._source_face, 'kps', None))
-
-        sx1, sy1, sx2, sy2 = self._source_face.bbox.astype(int)
-        sx1 = max(0, sx1)
-        sy1 = max(0, sy1)
-        sx2 = min(src_w, sx2)
-        sy2 = min(src_h, sy2)
-        if sx2 - sx1 < 12 or sy2 - sy1 < 12:
-            return swapped
-
         swapped_roi = swapped[y1:y2, x1:x2]
-        source_roi = self._source_img[sy1:sy2, sx1:sx2]
-        source_region = source_mask[sy1:sy2, sx1:sx2] > 0
-        if int(source_region.sum()) < 64:
-            return swapped
 
         swapped_lab = cv2.cvtColor(swapped_roi, cv2.COLOR_BGR2LAB).astype(np.float32)
-        source_lab = cv2.cvtColor(source_roi, cv2.COLOR_BGR2LAB).astype(np.float32)
 
         adjusted_lab = swapped_lab.copy()
         for ch in range(3):
             src_vals = swapped_lab[:, :, ch][region]
-            dst_vals = source_lab[:, :, ch][source_region]
             src_mean = float(src_vals.mean())
-            dst_mean = float(dst_vals.mean())
             src_std = float(src_vals.std())
-            dst_std = float(dst_vals.std())
+            dst_mean, dst_std = self._source_skin_stats[ch]
 
             scale = dst_std / max(src_std, 1.0)
             if ch == 0:
-                scale = float(np.clip(scale, 0.90, 1.10))
+                scale = float(np.clip(scale, 0.85, 1.22))
             else:
-                scale = float(np.clip(scale, 0.85, 1.18))
+                scale = float(np.clip(scale, 0.80, 1.35))
 
             channel = (swapped_lab[:, :, ch] - src_mean) * scale + dst_mean
             if ch == 0:
-                delta = np.clip(channel - swapped_lab[:, :, ch], -16.0, 16.0)
+                delta = np.clip(channel - swapped_lab[:, :, ch], -28.0, 28.0)
             else:
-                delta = np.clip(channel - swapped_lab[:, :, ch], -10.0, 10.0)
+                delta = np.clip(channel - swapped_lab[:, :, ch], -18.0, 18.0)
             adjusted_lab[:, :, ch] = np.clip(swapped_lab[:, :, ch] + delta, 0.0, 255.0)
 
         adjusted_roi = cv2.cvtColor(adjusted_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
         soft = cv2.GaussianBlur(target_mask.astype(np.float32) / 255.0, (31, 31), 8.0)[y1:y2, x1:x2]
-        soft = (soft * 0.78)[:, :, np.newaxis]
+        soft = (soft * 0.92)[:, :, np.newaxis]
 
         out = swapped.copy()
         out[y1:y2, x1:x2] = (
@@ -220,6 +216,10 @@ class SwapEngine:
         # Use the largest face
         self._source_face = sorted(faces, key=lambda f: f.bbox[2] - f.bbox[0], reverse=True)[0]
         self._source_img  = image.copy()
+        src_h, src_w = self._source_img.shape[:2]
+        source_mask = self._build_face_mask(self._source_face, src_h, src_w)
+        source_mask = self._refine_skin_mask(source_mask, self._source_face.bbox, getattr(self._source_face, 'kps', None))
+        self._source_skin_stats = self._compute_masked_lab_stats(self._source_img, source_mask)
         log.info('Identity face set (embedding shape: %s)', self._source_face.embedding.shape)
 
     def swap_frame(self, frame: np.ndarray) -> np.ndarray:
