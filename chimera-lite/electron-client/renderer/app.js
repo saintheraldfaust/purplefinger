@@ -101,21 +101,25 @@ let lastRecvFrames = 0;
 let lastSentAt = 0;
 let statsTimer = null;
 let currentProfile = 'realtime';
-let currentSendFps = 16;
-let currentSendQuality = 0.68;
-let currentSendW = 448;
-let currentSendH = 252;
+let currentSendFps = 15;
+let currentSendQuality = 0.72;
+let currentSendW = 576;
+let currentSendH = 324;
+let lightProbe = null;
+let lightProbeCtx = null;
+let currentCaptureFilter = 'none';
+let lastLightProbeAt = 0;
 
 const STREAM_PROFILES = {
   realtime: {
     label: 'Realtime',
-    sendFps: 16,
-    minFps: 12,
-    headroom: 2,
-    quality: 0.64,
-    width: 448,
-    height: 252,
-    summary: 'Realtime mode uses lighter processing, lower working resolution, and no enhancement for the smoothest motion.',
+    sendFps: 15,
+    minFps: 10,
+    headroom: 1,
+    quality: 0.72,
+    width: 576,
+    height: 324,
+    summary: 'Realtime mode keeps enhancement off, but now uses a sharper working resolution and stronger detection for better detail.',
   },
   quality: {
     label: 'Quality',
@@ -133,6 +137,50 @@ function ensureOffscreenCanvas() {
   if (!offscreen || offscreen.width !== currentSendW || offscreen.height !== currentSendH) {
     offscreen = new OffscreenCanvas(currentSendW, currentSendH);
     offCtx = offscreen.getContext('2d');
+  }
+}
+
+function ensureLightProbeCanvas() {
+  if (!lightProbe) {
+    lightProbe = document.createElement('canvas');
+    lightProbe.width = 32;
+    lightProbe.height = 18;
+    lightProbeCtx = lightProbe.getContext('2d', { willReadFrequently: true });
+  }
+}
+
+function updateCaptureFilter() {
+  if (currentProfile !== 'realtime' || !captureVideo || captureVideo.readyState < 2) {
+    currentCaptureFilter = 'none';
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastLightProbeAt < 300) return;
+  lastLightProbeAt = now;
+
+  ensureLightProbeCanvas();
+  if (!lightProbeCtx) {
+    currentCaptureFilter = 'none';
+    return;
+  }
+
+  lightProbeCtx.filter = 'none';
+  lightProbeCtx.drawImage(captureVideo, 0, 0, lightProbe.width, lightProbe.height);
+
+  const { data } = lightProbeCtx.getImageData(0, 0, lightProbe.width, lightProbe.height);
+  let total = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    total += (data[i] * 0.299) + (data[i + 1] * 0.587) + (data[i + 2] * 0.114);
+  }
+
+  const avgLuma = total / (data.length / 4);
+  if (avgLuma < 72) {
+    currentCaptureFilter = 'brightness(1.24) contrast(1.12) saturate(1.05)';
+  } else if (avgLuma < 96) {
+    currentCaptureFilter = 'brightness(1.12) contrast(1.06) saturate(1.03)';
+  } else {
+    currentCaptureFilter = 'none';
   }
 }
 
@@ -192,7 +240,10 @@ function doCapture() {
   _encodes++;
   lastSentAt = Date.now();
   ensureOffscreenCanvas();
+  updateCaptureFilter();
+  offCtx.filter = currentCaptureFilter;
   offCtx.drawImage(captureVideo, 0, 0, currentSendW, currentSendH);
+  offCtx.filter = 'none';
   offscreen.convertToBlob({ type: 'image/jpeg', quality: currentSendQuality })
     .then((blob) => {
       _encodes--;
@@ -305,8 +356,8 @@ async function startStreaming(ip, port) {
   setLog('Requesting camera...');
   localStream = await navigator.mediaDevices.getUserMedia({
     video: {
-      width:     { ideal: 640 },
-      height:    { ideal: 360 },
+      width:     { ideal: 960, max: 1280 },
+      height:    { ideal: 540, max: 720 },
       frameRate: { ideal: 20, max: 20 },
     },
     audio: false,
