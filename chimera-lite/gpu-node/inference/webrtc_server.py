@@ -54,21 +54,22 @@ async def handle_ws(request):
     await ws.prepare(request)
     log.info('WS connected from %s', request.remote)
 
-    latest = [None]
+    latest_in = [None]
+    latest_out = [None]
     frame_event = asyncio.Event()  # signals process_loop immediately when frame arrives
+    send_event = asyncio.Event()   # signals send_loop immediately when a processed frame is ready
 
     _recv_count = 0
     _recv_t0 = [0.0]
 
     async def process_loop():
-        global _fps_frame_count, _fps_window_start
         while not ws.closed:
             await frame_event.wait()
             frame_event.clear()
-            img = latest[0]
+            img = latest_in[0]
             if img is None:
                 continue
-            latest[0] = None
+            latest_in[0] = None
 
             runtime = pipeline.get_runtime_settings()
             proc_w = runtime['proc_w']
@@ -92,8 +93,26 @@ async def handle_ws(request):
                 log.warning('Frame error: %s', e)
                 continue
 
+            latest_out[0] = {
+                'buf': buf.tobytes(),
+                'frame_ms': frame_ms,
+                'produced_at': time.perf_counter(),
+            }
+            send_event.set()
+
+    async def send_loop():
+        global _fps_frame_count, _fps_window_start
+        while not ws.closed:
+            await send_event.wait()
+            send_event.clear()
+
+            packet = latest_out[0]
+            if packet is None:
+                continue
+            latest_out[0] = None
+
             try:
-                await ws.send_bytes(buf.tobytes())
+                await ws.send_bytes(packet['buf'])
             except Exception:
                 break
 
@@ -104,17 +123,25 @@ async def handle_ws(request):
             elif _fps_frame_count % 30 == 0:
                 fps = 30.0 / max(now - _fps_window_start, 1e-6)
                 recv_fps = _recv_count / max(now - _recv_t0[0], 1e-6) if _recv_t0[0] else 0
-                log.info('out FPS=%.1f  in FPS=%.1f  last_frame=%.0fms', fps, recv_fps, frame_ms)
+                queue_ms = (now - packet['produced_at']) * 1000
+                log.info(
+                    'out FPS=%.1f  in FPS=%.1f  last_frame=%.0fms  send_wait=%.0fms',
+                    fps,
+                    recv_fps,
+                    packet['frame_ms'],
+                    queue_ms,
+                )
                 _fps_window_start = now
 
     proc_task = asyncio.create_task(process_loop())
+    send_task = asyncio.create_task(send_loop())
     try:
         async for msg in ws:
             if msg.type == WSMsgType.BINARY:
                 arr = np.frombuffer(msg.data, dtype=np.uint8)
                 img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                 if img is not None:
-                    latest[0] = img
+                    latest_in[0] = img
                     _recv_count += 1
                     if _recv_t0[0] == 0.0:
                         _recv_t0[0] = time.perf_counter()
@@ -124,8 +151,13 @@ async def handle_ws(request):
                 break
     finally:
         proc_task.cancel()
+        send_task.cancel()
         try:
             await proc_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await send_task
         except asyncio.CancelledError:
             pass
 
