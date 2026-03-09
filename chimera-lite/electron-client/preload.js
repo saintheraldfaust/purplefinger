@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('chimera', {
+  getAppConfig: () => ipcRenderer.invoke('get-app-config'),
+  saveAppConfig: (config) => ipcRenderer.invoke('save-app-config', config),
   getStatus:    () => ipcRenderer.invoke('get-status'),
   startSession: () => ipcRenderer.invoke('start-session'),
   checkReady:   () => ipcRenderer.invoke('check-ready'),

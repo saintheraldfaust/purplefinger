@@ -1,6 +1,7 @@
 const btnUpload       = document.getElementById('btn-upload');
 const btnStart        = document.getElementById('btn-start');
 const btnStop         = document.getElementById('btn-stop');
+const btnSaveConfig   = document.getElementById('btn-save-config');
 const btnResetPreview = document.getElementById('btn-reset-preview');
 const btnModeRealtime = document.getElementById('btn-mode-realtime');
 const btnModeQuality  = document.getElementById('btn-mode-quality');
@@ -15,6 +16,11 @@ const launchOverlay   = document.getElementById('launch-overlay');
 const launchStatus    = document.getElementById('launch-status');
 const launchLines     = Array.from(document.querySelectorAll('.launch-line'));
 const launchTexts     = Array.from(document.querySelectorAll('.launch-text'));
+const cfgBackendUrl   = document.getElementById('cfg-backend-url');
+const cfgApiToken     = document.getElementById('cfg-api-token');
+const cfgObsPort      = document.getElementById('cfg-obs-port');
+const configNote      = document.getElementById('config-note');
+const obsUrlLabel     = document.getElementById('obs-url');
 
 const ctrlBrightness  = document.getElementById('ctrl-brightness');
 const ctrlContrast    = document.getElementById('ctrl-contrast');
@@ -46,6 +52,21 @@ function setLoading(loading) {
   btnStart.disabled = loading;
   btnStop.disabled = loading;
   btnUpload.disabled = loading;
+  if (btnSaveConfig) btnSaveConfig.disabled = loading;
+}
+
+function setConfigNote(message) {
+  if (configNote) configNote.textContent = message;
+}
+
+function applyConfigToUI(config) {
+  if (!config) return;
+  if (cfgBackendUrl) cfgBackendUrl.value = config.backendUrl || '';
+  if (cfgApiToken) cfgApiToken.value = config.apiToken || '';
+  if (cfgObsPort) cfgObsPort.value = String(config.obsPort || 7891);
+  if (obsUrlLabel) obsUrlLabel.textContent = config.obsUrl || `http://localhost:${config.obsPort || 7891}`;
+  const pathHint = config.configPath ? `Saved locally at ${config.configPath}` : 'Saved locally on this machine.';
+  setConfigNote(`${pathHint}\nStop any active session before changing these values.`);
 }
 
 function sleep(ms) {
@@ -337,6 +358,28 @@ ctrlSaturation.addEventListener('input', (e) => {
 btnResetPreview.addEventListener('click', () => setPreviewDefaults());
 btnModeRealtime.addEventListener('click', () => setProfile('realtime'));
 btnModeQuality.addEventListener('click', () => setProfile('quality'));
+btnSaveConfig.addEventListener('click', async () => {
+  if (ws || localStream || gpuIp) {
+    setConfigNote('Stop the current session before changing connection settings.');
+    return;
+  }
+
+  btnSaveConfig.disabled = true;
+  setConfigNote('Saving connection settings...');
+  try {
+    const saved = await window.chimera.saveAppConfig({
+      backendUrl: cfgBackendUrl.value,
+      apiToken: cfgApiToken.value,
+      obsPort: cfgObsPort.value,
+    });
+    applyConfigToUI(saved);
+    setLog('Connection settings saved.');
+  } catch (err) {
+    setConfigNote(`Failed to save settings: ${err.message}`);
+  } finally {
+    btnSaveConfig.disabled = false;
+  }
+});
 
 // --- WebSocket stream state ---
 let ws           = null;
@@ -528,6 +571,9 @@ btnStop.addEventListener('click', async () => {
   runLaunchSequence().catch(() => {});
   setPreviewDefaults();
   try {
+    const appConfig = await window.chimera.getAppConfig();
+    applyConfigToUI(appConfig);
+
     const profileData = await window.chimera.getStreamProfile();
     if (profileData?.profile) {
       await setProfile(profileData.profile, false);

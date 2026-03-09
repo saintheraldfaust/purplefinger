@@ -199,7 +199,7 @@ async function forwardFaceToGpu(endpoint, buffer) {
   form.append('face', buffer, { filename: 'face.jpg', contentType: 'image/jpeg' });
   await axios.post(`http://${endpoint.ip}:${endpoint.port}/set-face`, form, {
     headers: form.getHeaders(),
-    timeout: 15000,
+    timeout: 60000,
   });
 }
 
