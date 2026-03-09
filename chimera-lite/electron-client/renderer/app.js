@@ -14,8 +14,8 @@ const remoteCanvas    = document.getElementById('remote-canvas');
 const videoEmpty      = document.getElementById('video-empty');
 const launchOverlay   = document.getElementById('launch-overlay');
 const launchStatus    = document.getElementById('launch-status');
-const launchLines     = Array.from(document.querySelectorAll('.launch-line'));
-const launchTexts     = Array.from(document.querySelectorAll('.launch-text'));
+const launchAscii     = document.getElementById('launch-ascii');
+const launchLoader    = document.getElementById('launch-loader');
 const cfgBackendUrl   = document.getElementById('cfg-backend-url');
 const cfgApiToken     = document.getElementById('cfg-api-token');
 const cfgObsPort      = document.getElementById('cfg-obs-port');
@@ -85,29 +85,36 @@ async function typeLaunchText(el, text, speed = 180) {
 async function runLaunchSequence() {
   if (!launchOverlay) return;
 
-  launchStatus.textContent = 'Initializing live face swap interface...';
-  launchTexts.forEach((el) => {
-    el.textContent = '';
-    el.classList.remove('done');
-  });
+  const sequenceStartedAt = Date.now();
+  const minSequenceMs = 15000;
 
-  launchLines.forEach((line) => line.classList.remove('visible'));
+  const loaderSteps = [
+    'Loading core systems...',
+    'Linking hosted backend...',
+    'Priming live swap interface...',
+  ];
 
-  await sleep(1400);
+  launchStatus.textContent = 'Initializing Purplefinger...';
+  if (launchAscii) launchAscii.classList.remove('visible');
+  if (launchLoader) launchLoader.textContent = '';
 
-  for (let i = 0; i < launchLines.length; i++) {
-    const line = launchLines[i];
-    const textEl = launchTexts[i];
-    const text = textEl.dataset.text || '';
-    line.classList.add('visible');
-    launchStatus.textContent = `Bootstrapping ${text}...`;
-    await sleep(900);
-    await typeLaunchText(textEl, text, i === 0 ? 220 : i === 1 ? 185 : 170);
-    await sleep(i === launchLines.length - 1 ? 2200 : 1400);
+  await sleep(350);
+  if (launchAscii) launchAscii.classList.add('visible');
+
+  for (const step of loaderSteps) {
+    launchStatus.textContent = step;
+    if (launchLoader) await typeLaunchText(launchLoader, step, 32);
+    await sleep(360);
   }
 
-  launchStatus.textContent = 'Interface ready.';
-  await sleep(4200);
+  launchStatus.textContent = 'Purplefinger ready.';
+  if (launchLoader) launchLoader.textContent = 'Opening interface...';
+
+  const remainingMs = Math.max(0, minSequenceMs - (Date.now() - sequenceStartedAt));
+  if (remainingMs > 0) {
+    await sleep(remainingMs);
+  }
+
   launchOverlay.classList.add('hidden');
 }
 

@@ -433,7 +433,7 @@
     }
 
     #launch-card {
-      width: min(760px, calc(100vw - 48px));
+      width: min(1180px, calc(100vw - 40px));
       border-radius: 24px;
       border: 1px solid rgba(96, 165, 250, 0.22);
       background: rgba(2, 6, 23, 0.78);
@@ -470,7 +470,7 @@
     }
 
     #launch-body {
-      padding: 26px 28px 30px;
+      padding: 28px 30px 32px;
       display: grid;
       gap: 18px;
     }
@@ -500,9 +500,9 @@
     }
 
     #launch-terminal {
-      min-height: 220px;
+      min-height: 430px;
       border-radius: 18px;
-      padding: 18px 20px;
+      padding: 26px 28px;
       background: linear-gradient(180deg, rgba(3, 7, 18, 0.95) 0%, rgba(2, 6, 23, 0.98) 100%);
       border: 1px solid rgba(96, 165, 250, 0.12);
       color: #dbeafe;
@@ -510,37 +510,37 @@
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
     }
 
-    .launch-line {
-      min-height: 1.5em;
+    #launch-ascii {
+      margin: 0;
+      min-height: 320px;
       display: flex;
       align-items: center;
-      gap: 12px;
+      justify-content: center;
+      white-space: pre;
+      overflow: hidden;
+      width: 100%;
+      font-size: clamp(10px, 1.12vw, 18px);
+      line-height: 1.02;
+      letter-spacing: 0.01em;
+      text-align: center;
+      color: #93c5fd;
+      text-shadow: 0 0 18px rgba(56, 189, 248, 0.22);
       opacity: 0;
-      transform: translateY(6px);
-      transition: opacity 0.22s ease, transform 0.22s ease;
+      transform: translateY(8px) scale(0.985);
+      transition: opacity 0.35s ease, transform 0.35s ease;
     }
 
-    .launch-line.visible {
+    #launch-ascii.visible {
       opacity: 1;
       transform: translateY(0);
     }
 
-    .launch-prompt {
-      color: #38bdf8;
-      user-select: none;
-    }
-
-    .launch-text {
-      position: relative;
-      white-space: pre;
-      overflow: hidden;
-      display: inline-block;
-      max-width: calc(100% - 28px);
-      border-right: 2px solid rgba(125, 211, 252, 0.85);
-    }
-
-    .launch-text.done {
-      border-right-color: transparent;
+    #launch-loader {
+      min-height: 1.6em;
+      color: #cbd5e1;
+      font-size: 0.88rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
 
     .launch-subtext {
@@ -570,11 +570,22 @@
           <div id="launch-status">Initializing live face swap interface...</div>
         </div>
         <div id="launch-terminal">
-          <div class="launch-line"><span class="launch-prompt">root@purplefinger:~$</span><span class="launch-text" data-text="Purplefinger"></span></div>
-          <div class="launch-line"><span class="launch-prompt">root@purplefinger:~$</span><span class="launch-text" data-text="Chimera lite"></span></div>
-          <div class="launch-line"><span class="launch-prompt">root@purplefinger:~$</span><span class="launch-text" data-text="Saint Herald Faust"></span></div>
+<pre id="launch-ascii">██████╗ ██╗   ██╗██████╗ ██████╗ ██╗     ███████╗
+██╔══██╗██║   ██║██╔══██╗██╔══██╗██║     ██╔════╝
+██████╔╝██║   ██║██████╔╝██████╔╝██║     █████╗  
+██╔═══╝ ██║   ██║██╔══██╗██╔═══╝ ██║     ██╔══╝  
+██║     ╚██████╔╝██║  ██║██║     ███████╗███████╗
+╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝
+
+███████╗██╗███╗   ██╗ ██████╗ ███████╗██████╗ 
+██╔════╝██║████╗  ██║██╔════╝ ██╔════╝██╔══██╗
+█████╗  ██║██╔██╗ ██║██║  ███╗█████╗  ██████╔╝
+██╔══╝  ██║██║╚██╗██║██║   ██║██╔══╝  ██╔══██╗
+██║     ██║██║ ╚████║╚██████╔╝███████╗██║  ██║
+╚═╝     ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝</pre>
+          <div id="launch-loader">Loading core systems...</div>
         </div>
-        <div class="launch-subtext">Realtime launch monitor · webcam pipeline primed</div>
+        <div class="launch-subtext">Purplefinger launch monitor · hosted realtime pipeline</div>
       </div>
     </div>
   </div>
