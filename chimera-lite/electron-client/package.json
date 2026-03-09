@@ -1,15 +1,64 @@
 {
   "name": "chimera-lite-client",
   "version": "1.0.0",
+  "productName": "Chimera Lite",
+  "description": "Realtime face swap client for Project Chimera Lite",
+  "author": "Saint Herald Faust",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --win portable",
+    "dist:installer": "electron-builder --win nsis",
+    "pack": "electron-builder --win dir"
   },
   "dependencies": {
     "axios": "^1.7.2",
     "dotenv": "^16.4.5"
   },
   "devDependencies": {
-    "electron": "^31.0.0"
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.purplefinger.chimeralite",
+    "productName": "Chimera Lite",
+    "asar": true,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".env.example",
+        "to": ".env.example"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "publisherName": "Saint Herald Faust",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Chimera-Lite-${version}-Portable.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    }
   }
 }

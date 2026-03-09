@@ -245,6 +245,39 @@
       cursor: pointer;
     }
 
+    .text-input {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(17, 24, 39, 0.72);
+      color: var(--text);
+      padding: 11px 12px;
+      font-size: 0.84rem;
+      outline: none;
+    }
+
+    .text-input:focus {
+      border-color: rgba(96, 165, 250, 0.45);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    .field-stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .field-label {
+      display: grid;
+      gap: 6px;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    #config-note {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     #stats-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -581,6 +614,26 @@
       </section>
 
       <section class="panel">
+        <div class="panel-title">Connection Settings</div>
+        <div class="field-stack">
+          <label class="field-label">
+            <span>Backend URL</span>
+            <input id="cfg-backend-url" class="text-input" type="text" placeholder="https://purplefinger-chimera.onrender.com" />
+          </label>
+          <label class="field-label">
+            <span>API Token</span>
+            <input id="cfg-api-token" class="text-input" type="password" placeholder="Render API token" />
+          </label>
+          <label class="field-label">
+            <span>OBS Port</span>
+            <input id="cfg-obs-port" class="text-input" type="number" min="1" max="65535" placeholder="7891" />
+          </label>
+          <button id="btn-save-config" class="ghost-btn">Save Connection Settings</button>
+        </div>
+        <div class="panel-copy" id="config-note">Saved locally on this machine. Stop any active session before changing these values.</div>
+      </section>
+
+      <section class="panel">
         <div class="panel-title">Stream Mode</div>
         <div class="segmented">
           <button id="btn-mode-realtime" class="segmented-btn active">
@@ -647,7 +700,7 @@
 
   <footer id="footer">
     <div id="log">Ready</div>
-    <div id="obs-hint">OBS Browser Source → <span>http://localhost:7891</span></div>
+    <div id="obs-hint">OBS Browser Source → <span id="obs-url">http://localhost:7891</span></div>
   </footer>
 
   <script src="app.js"></script>
