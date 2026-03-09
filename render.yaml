@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: chimera-lite-backend
+    runtime: node
+    rootDir: chimera-lite/backend
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: API_TOKEN
+        sync: false
+      - key: RUNPOD_API_KEY
+        sync: false
+      - key: RUNPOD_GPU_TYPE
+        value: NVIDIA GeForce RTX 4090
+      - key: RUNPOD_TEMPLATE_ID
+        sync: false
+      - key: RUNPOD_NETWORK_VOLUME_ID
+        sync: false

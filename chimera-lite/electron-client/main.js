@@ -1,13 +1,41 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const axios = require('axios');
 const http = require('http');
+const dotenv = require('dotenv');
 
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
-const API_TOKEN = process.env.API_TOKEN || 'kdieoqwiasmsoalkw';
-const OBS_PORT = 7891;
+const envCandidates = [
+  path.join(process.cwd(), '.env'),
+  path.join(__dirname, '.env'),
+  path.join(path.dirname(app.getPath('exe')), '.env'),
+  path.join(process.resourcesPath, '.env'),
+];
+
+for (const envPath of envCandidates) {
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath, override: false });
+  }
+}
+
+function normalizeBaseUrl(url) {
+  return String(url || '').trim().replace(/\/+$/, '');
+}
+
+const BACKEND_URL = normalizeBaseUrl(process.env.BACKEND_URL || 'http://localhost:3000');
+const API_TOKEN = String(process.env.API_TOKEN || '').trim();
+const OBS_PORT = Number(process.env.OBS_PORT || 7891);
 
 const headers = { 'x-api-token': API_TOKEN };
+
+function ensureBackendConfig() {
+  if (!BACKEND_URL) {
+    throw new Error('Missing BACKEND_URL. Add it to electron-client/.env or beside the EXE.');
+  }
+  if (!API_TOKEN) {
+    throw new Error('Missing API_TOKEN. Add it to electron-client/.env or beside the EXE.');
+  }
+}
 
 // ---------------------------------------------------------------------------
 // OBS Browser Source server
@@ -65,6 +93,7 @@ es.addEventListener('frame', (e) => {
 
 obsServer.listen(OBS_PORT, '127.0.0.1', () => {
   console.log(`[OBS] Browser Source ready → http://localhost:${OBS_PORT}`);
+  console.log(`[Config] Backend URL → ${BACKEND_URL}`);
 });
 
 let mainWindow;
@@ -109,36 +138,43 @@ app.on('window-all-closed', () => {
 // --- IPC Handlers ---
 
 ipcMain.handle('get-status', async () => {
+  ensureBackendConfig();
   const res = await axios.get(`${BACKEND_URL}/status`, { headers });
   return res.data;
 });
 
 ipcMain.handle('start-session', async () => {
+  ensureBackendConfig();
   const res = await axios.post(`${BACKEND_URL}/start`, {}, { headers, timeout: 10 * 60 * 1000 });
   return res.data;
 });
 
 ipcMain.handle('check-ready', async () => {
+  ensureBackendConfig();
   const res = await axios.get(`${BACKEND_URL}/ready`, { headers, timeout: 5000 });
   return res.data;
 });
 
 ipcMain.handle('stop-session', async () => {
+  ensureBackendConfig();
   const res = await axios.post(`${BACKEND_URL}/stop`, {}, { headers });
   return res.data;
 });
 
 ipcMain.handle('get-stream-profile', async () => {
+  ensureBackendConfig();
   const res = await axios.get(`${BACKEND_URL}/stream-profile`, { headers });
   return res.data;
 });
 
 ipcMain.handle('set-stream-profile', async (_event, profile) => {
+  ensureBackendConfig();
   const res = await axios.post(`${BACKEND_URL}/stream-profile`, { profile }, { headers });
   return res.data;
 });
 
 ipcMain.handle('upload-face', async (_event, buffer, filename) => {
+  ensureBackendConfig();
   const FormData = require('form-data');
   const form = new FormData();
   form.append('face', Buffer.from(buffer), { filename, contentType: 'image/jpeg' });
