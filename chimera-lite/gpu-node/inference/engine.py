@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import logging
 import time
+import os
 from types import SimpleNamespace
 
 if torch.cuda.is_available():
@@ -40,19 +41,28 @@ class SwapEngine:
         import insightface
         import onnxruntime as ort
         from insightface.app import FaceAnalysis
-        from insightface.model_zoo import model_zoo
 
         log.info('Loading InsightFace buffalo_l...')
         # Cache models on volume so they survive pod restarts
-        import os
         os.environ.setdefault('INSIGHTFACE_HOME', '/workspace/.insightface')
         ort_providers = ort.get_available_providers()
         log.info('onnxruntime available providers: %s', ort_providers)
         if 'CUDAExecutionProvider' not in ort_providers:
             raise RuntimeError(f'CUDAExecutionProvider not available in onnxruntime: {ort_providers}')
 
-        self.app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        self.app.prepare(ctx_id=0, det_size=(320, 320))  # 320 is fast enough for webcam faces
+        self.source_app = FaceAnalysis(
+            name='buffalo_l',
+            allowed_modules=['detection', 'recognition', 'landmark_2d_106'],
+            providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
+        )
+        self.source_app.prepare(ctx_id=0, det_size=(320, 320))
+
+        self.target_app = FaceAnalysis(
+            name='buffalo_l',
+            allowed_modules=['detection', 'landmark_2d_106'],
+            providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
+        )
+        self.target_app.prepare(ctx_id=0, det_size=(320, 320))  # 320 is fast enough for webcam faces
 
         log.info('Loading inswapper_128 from %s...', model_path)
         self.swapper = insightface.model_zoo.get_model(
@@ -64,14 +74,8 @@ class SwapEngine:
         if 'CUDAExecutionProvider' not in swapper_providers:
             raise RuntimeError(f'inswapper is not using CUDAExecutionProvider: {swapper_providers}')
 
-        app_model_providers = {}
-        for name, model in getattr(self.app, 'models', {}).items():
-            session = getattr(model, 'session', None)
-            if session is not None and hasattr(session, 'get_providers'):
-                providers = session.get_providers()
-                app_model_providers[name] = providers
-        if app_model_providers:
-            log.info('face analysis model providers: %s', app_model_providers)
+        self._log_app_model_providers('source analysis', self.source_app)
+        self._log_app_model_providers('target analysis', self.target_app)
 
         self._source_face = None  # cached after set_identity()
         self._source_img  = None
@@ -85,7 +89,18 @@ class SwapEngine:
         self._smoothed_lmk106 = None
         self._source_skin_stats = None
         self._source_skin_zone_stats = None
+        self._source_vertical_stat_map_cache = {}
+        self._blend_asset_cache = {}
         self._profile_counter = 0
+
+    def _log_app_model_providers(self, label, app):
+        app_model_providers = {}
+        for name, model in getattr(app, 'models', {}).items():
+            session = getattr(model, 'session', None)
+            if session is not None and hasattr(session, 'get_providers'):
+                app_model_providers[name] = session.get_providers()
+        if app_model_providers:
+            log.info('%s providers: %s', label, app_model_providers)
 
     def set_detect_every_n(self, n: int):
         self.DETECT_EVERY_N = max(1, int(n))
@@ -161,6 +176,47 @@ class SwapEngine:
         ry2 = min(h, int(round(cy + half_h)))
         return rx1, ry1, rx2, ry2
 
+    def _make_blend_cache_key(self, face, h, w):
+        bbox = np.asarray(getattr(face, 'bbox', np.zeros(4, dtype=np.float32)), dtype=np.float32)
+        bbox_key = tuple(np.round(bbox / 4.0).astype(np.int32).tolist())
+
+        kps = getattr(face, 'kps', None)
+        if kps is not None:
+            kps_arr = np.asarray(kps, dtype=np.float32)[:5]
+            kps_key = tuple(np.round(kps_arr.reshape(-1) / 4.0).astype(np.int32).tolist())
+        else:
+            kps_key = ()
+
+        return (h, w, bbox_key, kps_key)
+
+    def _store_blend_assets(self, key, assets):
+        self._blend_asset_cache[key] = assets
+        while len(self._blend_asset_cache) > 6:
+            self._blend_asset_cache.pop(next(iter(self._blend_asset_cache)))
+
+    def _get_blend_assets(self, face, h, w):
+        key = self._make_blend_cache_key(face, h, w)
+        cached = self._blend_asset_cache.get(key)
+        if cached is not None:
+            return cached
+
+        complexion_mask = self._build_complexion_mask(face, h, w)
+        target_mask = self._refine_skin_mask(complexion_mask.copy(), face.bbox, getattr(face, 'kps', None))
+        blend_mask = self._build_face_mask(face, h, w)
+        blend_alpha = cv2.GaussianBlur(
+            blend_mask.astype(np.float32) / 255.0, (51, 51), 14.0
+        )[:, :, np.newaxis]
+        tone_soft = (self._build_perimeter_falloff(target_mask, face.bbox) * 0.97)[:, :, np.newaxis]
+
+        assets = {
+            'complexion_mask': complexion_mask,
+            'tone_mask': target_mask,
+            'blend_alpha': blend_alpha,
+            'tone_soft': tone_soft,
+        }
+        self._store_blend_assets(key, assets)
+        return assets
+
     def _detect_primary_face(self, frame):
         detect_t0 = time.perf_counter()
         if self._cached_target_faces:
@@ -168,13 +224,13 @@ class SwapEngine:
             rx1, ry1, rx2, ry2 = self._compute_roi(frame.shape, face.bbox)
             roi = frame[ry1:ry2, rx1:rx2]
             if roi.size > 0:
-                faces = self.app.get(roi)
+                faces = self.target_app.get(roi)
                 detect_ms = (time.perf_counter() - detect_t0) * 1000
                 if faces:
                     primary = sorted(faces, key=lambda f: f.bbox[2] - f.bbox[0], reverse=True)[0]
                     return self._copy_face_with_offset(primary, rx1, ry1), detect_ms, 'roi'
 
-        faces = self.app.get(frame)
+        faces = self.target_app.get(frame)
         detect_ms = (time.perf_counter() - detect_t0) * 1000
         if not faces:
             return None, detect_ms, 'full'
@@ -190,19 +246,15 @@ class SwapEngine:
 
         local_face = self._copy_face_with_offset(face, -rx1, -ry1)
         roi_h, roi_w = roi.shape[:2]
+        blend_assets = self._get_blend_assets(local_face, roi_h, roi_w)
 
         swap_t0 = time.perf_counter()
         swapped_roi = self.swapper.get(roi, local_face, self._source_face, paste_back=True)
         swap_ms = (time.perf_counter() - swap_t0) * 1000
 
         blend_t0 = time.perf_counter()
-        complexion_mask = self._build_complexion_mask(local_face, roi_h, roi_w)
-        swapped_roi = self._match_face_tone(swapped_roi, local_face, complexion_mask)
-
-        blend_mask = self._build_face_mask(local_face, roi_h, roi_w)
-        mask_f = cv2.GaussianBlur(
-            blend_mask.astype(np.float32) / 255.0, (51, 51), 14.0
-        )[:, :, np.newaxis]
+        swapped_roi = self._match_face_tone(swapped_roi, local_face, blend_assets)
+        mask_f = blend_assets['blend_alpha']
 
         out_roi = (
             swapped_roi.astype(np.float32) * mask_f +
@@ -354,6 +406,11 @@ class SwapEngine:
         if not self._source_skin_zone_stats:
             return None, None
 
+        cache_key = (roi_h, roi_w)
+        cached = self._source_vertical_stat_map_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         norm_y = np.linspace(0.0, 1.0, roi_h, dtype=np.float32)[:, np.newaxis]
         centers = np.array([0.18, 0.50, 0.82], dtype=np.float32)
         widths = np.array([0.18, 0.18, 0.16], dtype=np.float32)
@@ -375,7 +432,11 @@ class SwapEngine:
             mean_maps.append(np.repeat(mean_map, roi_w, axis=1))
             std_maps.append(np.repeat(std_map, roi_w, axis=1))
 
-        return mean_maps, std_maps
+        maps = (mean_maps, std_maps)
+        self._source_vertical_stat_map_cache[cache_key] = maps
+        while len(self._source_vertical_stat_map_cache) > 8:
+            self._source_vertical_stat_map_cache.pop(next(iter(self._source_vertical_stat_map_cache)))
+        return maps
 
     def _build_perimeter_falloff(self, mask, bbox):
         x1, y1, x2, y2 = np.asarray(bbox, dtype=np.int32)
@@ -410,7 +471,7 @@ class SwapEngine:
         falloff = cv2.GaussianBlur(falloff.astype(np.float32), (31, 31), 6.0)
         return np.clip(falloff, 0.0, 1.0)
 
-    def _match_face_tone(self, swapped, face, face_mask):
+    def _match_face_tone(self, swapped, face, blend_assets):
         if self._source_face is None or self._source_img is None or self._source_skin_stats is None:
             return swapped
 
@@ -422,7 +483,7 @@ class SwapEngine:
         if x2 - x1 < 12 or y2 - y1 < 12:
             return swapped
 
-        target_mask = self._refine_skin_mask(face_mask.copy(), face.bbox, getattr(face, 'kps', None))
+        target_mask = blend_assets['tone_mask']
         region = target_mask[y1:y2, x1:x2] > 0
         if int(region.sum()) < 64:
             return swapped
@@ -458,8 +519,7 @@ class SwapEngine:
             adjusted_lab[:, :, ch] = np.clip(swapped_lab[:, :, ch] + delta, 0.0, 255.0)
 
         adjusted_roi = cv2.cvtColor(adjusted_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        soft = self._build_perimeter_falloff(target_mask, face.bbox)[y1:y2, x1:x2]
-        soft = (soft * 0.97)[:, :, np.newaxis]
+        soft = blend_assets['tone_soft'][y1:y2, x1:x2]
 
         out = swapped.copy()
         out[y1:y2, x1:x2] = (
@@ -470,12 +530,13 @@ class SwapEngine:
 
     def set_identity(self, image: np.ndarray):
         """Extract and cache the source face embedding from the identity image."""
-        faces = self.app.get(image)
+        faces = self.source_app.get(image)
         if not faces:
             raise ValueError('No face detected in identity image')
         # Use the largest face
         self._source_face = sorted(faces, key=lambda f: f.bbox[2] - f.bbox[0], reverse=True)[0]
         self._source_img  = image.copy()
+        self._source_vertical_stat_map_cache.clear()
         src_h, src_w = self._source_img.shape[:2]
         source_mask = self._build_complexion_mask(self._source_face, src_h, src_w)
         source_mask = self._refine_skin_mask(source_mask, self._source_face.bbox, getattr(self._source_face, 'kps', None))
