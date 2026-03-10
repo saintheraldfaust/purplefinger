@@ -42,7 +42,7 @@ class SwapEngine:
         import os
         os.environ.setdefault('INSIGHTFACE_HOME', '/workspace/.insightface')
         self.app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        self.app.prepare(ctx_id=0, det_size=(256, 256))  # lower det size trims CPU cost in realtime mode
+        self.app.prepare(ctx_id=0, det_size=(320, 320))  # 320 is fast enough for webcam faces
 
         log.info('Loading inswapper_128 from %s...', model_path)
         self.swapper = insightface.model_zoo.get_model(
