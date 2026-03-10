@@ -9,8 +9,8 @@ import cv2
 import numpy as np
 import torch
 import logging
-import copy
 import time
+from types import SimpleNamespace
 
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True  # speed up conv ops after first frame
@@ -123,7 +123,15 @@ class SwapEngine:
         return face
 
     def _copy_face_with_offset(self, face, dx=0.0, dy=0.0):
-        cloned = copy.deepcopy(face)
+        cloned = SimpleNamespace()
+
+        for attr in ('bbox', 'kps', 'landmark_2d_106', 'det_score', 'embedding', 'gender', 'sex', 'age'):
+            if hasattr(face, attr):
+                value = getattr(face, attr)
+                if isinstance(value, np.ndarray):
+                    value = value.copy()
+                setattr(cloned, attr, value)
+
         delta = np.array([dx, dy, dx, dy], dtype=np.float32)
         cloned.bbox = np.asarray(cloned.bbox, dtype=np.float32) + delta
 
