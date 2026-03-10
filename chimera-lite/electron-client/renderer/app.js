@@ -2,12 +2,14 @@ const btnUpload       = document.getElementById('btn-upload');
 const btnStart        = document.getElementById('btn-start');
 const btnStop         = document.getElementById('btn-stop');
 const btnSaveConfig   = document.getElementById('btn-save-config');
+const btnAttachPod    = document.getElementById('btn-attach-pod');
 const btnResetPreview = document.getElementById('btn-reset-preview');
 const btnModeRealtime = document.getElementById('btn-mode-realtime');
 const btnModeQuality  = document.getElementById('btn-mode-quality');
 const faceInput       = document.getElementById('face-input');
 const facePreview     = document.getElementById('face-preview');
 const statusBadge     = document.getElementById('status-badge');
+const currentPodLabel = document.getElementById('current-pod');
 const log             = document.getElementById('log');
 const localVideo      = document.getElementById('local-video');
 const remoteCanvas    = document.getElementById('remote-canvas');
@@ -19,6 +21,7 @@ const launchLoader    = document.getElementById('launch-loader');
 const cfgBackendUrl   = document.getElementById('cfg-backend-url');
 const cfgApiToken     = document.getElementById('cfg-api-token');
 const cfgObsPort      = document.getElementById('cfg-obs-port');
+const cfgWarmPodId    = document.getElementById('cfg-warm-pod-id');
 const configNote      = document.getElementById('config-note');
 const obsUrlLabel     = document.getElementById('obs-url');
 
@@ -48,11 +51,25 @@ function setLog(msg) {
   log.textContent = msg;
 }
 
+function setCurrentPod(podId, endpoint) {
+  if (!currentPodLabel) return;
+  if (!podId) {
+    currentPodLabel.textContent = 'Pod: —';
+    currentPodLabel.title = 'No active pod';
+    return;
+  }
+
+  const endpointText = endpoint?.ip && endpoint?.port ? ` · ${endpoint.ip}:${endpoint.port}` : '';
+  currentPodLabel.textContent = `Pod: ${podId}${endpointText}`;
+  currentPodLabel.title = `Pod ID: ${podId}${endpointText}`;
+}
+
 function setLoading(loading) {
   btnStart.disabled = loading;
   btnStop.disabled = loading;
   btnUpload.disabled = loading;
   if (btnSaveConfig) btnSaveConfig.disabled = loading;
+  if (btnAttachPod) btnAttachPod.disabled = loading;
 }
 
 function setConfigNote(message) {
@@ -64,9 +81,10 @@ function applyConfigToUI(config) {
   if (cfgBackendUrl) cfgBackendUrl.value = config.backendUrl || '';
   if (cfgApiToken) cfgApiToken.value = config.apiToken || '';
   if (cfgObsPort) cfgObsPort.value = String(config.obsPort || 7891);
+  if (cfgWarmPodId) cfgWarmPodId.value = config.warmPodId || '';
   if (obsUrlLabel) obsUrlLabel.textContent = config.obsUrl || `http://localhost:${config.obsPort || 7891}`;
   const pathHint = config.configPath ? `Saved locally at ${config.configPath}` : 'Saved locally on this machine.';
-  setConfigNote(`${pathHint}\nStop any active session before changing these values.`);
+  setConfigNote(`${pathHint}\nOptional warm pod ID lets the app reuse a specific live pod. Stop any active session before changing these values.`);
 }
 
 function sleep(ms) {
@@ -378,6 +396,7 @@ btnSaveConfig.addEventListener('click', async () => {
       backendUrl: cfgBackendUrl.value,
       apiToken: cfgApiToken.value,
       obsPort: cfgObsPort.value,
+      warmPodId: cfgWarmPodId.value,
     });
     applyConfigToUI(saved);
     setLog('Connection settings saved.');
@@ -385,6 +404,38 @@ btnSaveConfig.addEventListener('click', async () => {
     setConfigNote(`Failed to save settings: ${err.message}`);
   } finally {
     btnSaveConfig.disabled = false;
+  }
+});
+
+btnAttachPod.addEventListener('click', async () => {
+  const podId = String(cfgWarmPodId.value || '').trim();
+  if (!podId) {
+    setConfigNote('Enter a warm pod ID before attaching it.');
+    return;
+  }
+  if (ws || localStream || gpuIp) {
+    setConfigNote('Stop the current session before attaching a different pod.');
+    return;
+  }
+
+  btnAttachPod.disabled = true;
+  setConfigNote('Attaching warm pod...');
+  try {
+    const result = await window.chimera.attachWarmPod(podId);
+    const saved = await window.chimera.saveAppConfig({
+      backendUrl: cfgBackendUrl.value,
+      apiToken: cfgApiToken.value,
+      obsPort: cfgObsPort.value,
+      warmPodId: podId,
+    });
+    applyConfigToUI(saved);
+    setCurrentPod(result.podId, result.endpoint);
+    setLog(`Warm pod attached — ${result.endpoint.ip}:${result.endpoint.port}`);
+    setConfigNote(`Warm pod attached: ${podId}`);
+  } catch (err) {
+    setConfigNote(`Failed to attach warm pod: ${err.message}`);
+  } finally {
+    btnAttachPod.disabled = false;
   }
 });
 
@@ -511,17 +562,29 @@ faceInput.addEventListener('change', async () => {
 // --- Start Session ---
 btnStart.addEventListener('click', async () => {
   setStatus('Starting...', 'loading');
-  setLog('Provisioning GPU pod...');
+  setLog('Checking for a reusable warm pod...');
   setLoading(true);
 
   try {
-    // /start returns as soon as the pod has an IP — usually ~1-2 min.
-    // The inference server (pip install + model load) may still be booting.
+    const configuredWarmPodId = String(cfgWarmPodId?.value || '').trim();
+    if (configuredWarmPodId) {
+      setLog(`Attaching configured warm pod ${configuredWarmPodId}...`);
+      await window.chimera.attachWarmPod(configuredWarmPodId);
+    }
+
+    // /start now reuses a live warm pod when one already exists.
     const data = await window.chimera.startSession();
+    setCurrentPod(data.podId, data.endpoint);
 
     btnStart.style.display = 'none';
     btnStop.style.display  = 'block';
     btnStop.disabled       = false;
+
+    if (data.reused) {
+      setLog('Warm pod found. Checking server readiness...');
+    } else {
+      setLog('Provisioning a new GPU pod...');
+    }
 
     // Poll /ready until the inference server is accepting connections.
     // Show elapsed time so the user knows it's working, not frozen.
@@ -532,7 +595,8 @@ btnStart.addEventListener('click', async () => {
       const elapsed = Math.round((Date.now() - startedAt) / 1000);
       dots = (dots + 1) % 4;
       const d = '.'.repeat(dots + 1);
-      setLog(`Server starting${d}  ${elapsed}s  (first boot installs packages — ~5-10 min)`);
+      const prefix = data.reused ? 'Warm pod waking' : 'Server starting';
+      setLog(`${prefix}${d}  ${elapsed}s`);
       try {
         const r = await window.chimera.checkReady();
         if (r.ready) break;
@@ -561,6 +625,7 @@ btnStop.addEventListener('click', async () => {
 
   try {
     await window.chimera.stopSession();
+    setCurrentPod(null);
     setStatus('Idle', '');
     setLog('Session stopped.');
     btnStop.style.display  = 'none';
@@ -593,11 +658,14 @@ btnStop.addEventListener('click', async () => {
       if (data.streamProfile) {
         await setProfile(data.streamProfile, false);
       }
+      setCurrentPod(data.podId, data.endpoint);
       setStatus('Active', 'active');
       btnStart.style.display = 'none';
       btnStop.style.display  = 'block';
       setLog('Reconnecting...');
       await startStreaming(data.endpoint.ip, data.endpoint.port);
+    } else {
+      setCurrentPod(null);
     }
   } catch (_) {}
 })();

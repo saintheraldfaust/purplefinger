@@ -65,6 +65,19 @@
 
     #header-right { display: flex; align-items: center; gap: 12px; }
 
+    #current-pod {
+      font-size: 0.76rem;
+      padding: 5px 12px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.95);
+      color: #93c5fd;
+      border: 1px solid var(--border);
+      white-space: nowrap;
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     #status-badge {
       font-size: 0.78rem;
       padding: 5px 14px;
@@ -596,6 +609,7 @@
       <div id="branding-sub">Developed by Saint Herald Faust (Ken)</div>
     </div>
     <div id="header-right">
+      <div id="current-pod">Pod: —</div>
       <div id="status-badge">Idle</div>
     </div>
   </header>
@@ -639,6 +653,11 @@
             <span>OBS Port</span>
             <input id="cfg-obs-port" class="text-input" type="number" min="1" max="65535" placeholder="7891" />
           </label>
+          <label class="field-label">
+            <span>Warm Pod ID (optional)</span>
+            <input id="cfg-warm-pod-id" class="text-input" type="text" placeholder="62amwmbzwbod9q" />
+          </label>
+          <button id="btn-attach-pod" class="ghost-btn">Attach Warm Pod</button>
           <button id="btn-save-config" class="ghost-btn">Save Connection Settings</button>
         </div>
         <div class="panel-copy" id="config-note">Saved locally on this machine. Stop any active session before changing these values.</div>

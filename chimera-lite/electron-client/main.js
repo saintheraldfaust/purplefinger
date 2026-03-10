@@ -36,10 +36,15 @@ function normalizePort(value, fallback = 7891) {
   return Number.isFinite(port) && port > 0 && port < 65536 ? Math.round(port) : fallback;
 }
 
+function normalizePodId(value) {
+  return String(value || '').trim();
+}
+
 let appConfig = {
   backendUrl: normalizeBaseUrl(process.env.BACKEND_URL || 'https://purplefinger-chimera.onrender.com'),
   apiToken: String(process.env.API_TOKEN || '').trim(),
   obsPort: normalizePort(process.env.OBS_PORT, 7891),
+  warmPodId: normalizePodId(process.env.WARM_POD_ID || ''),
 };
 
 function getHeaders() {
@@ -59,6 +64,7 @@ function validateConfig(nextConfig) {
   const backendUrl = normalizeBaseUrl(nextConfig.backendUrl);
   const apiToken = String(nextConfig.apiToken || '').trim();
   const obsPort = normalizePort(nextConfig.obsPort, 7891);
+  const warmPodId = normalizePodId(nextConfig.warmPodId || '');
 
   if (!backendUrl || !/^https?:\/\//i.test(backendUrl)) {
     throw new Error('Backend URL must start with http:// or https://');
@@ -67,7 +73,7 @@ function validateConfig(nextConfig) {
     throw new Error('API token is required');
   }
 
-  return { backendUrl, apiToken, obsPort };
+  return { backendUrl, apiToken, obsPort, warmPodId };
 }
 
 function writeConfigFile(nextConfig) {
@@ -77,6 +83,7 @@ function writeConfigFile(nextConfig) {
     `BACKEND_URL=${nextConfig.backendUrl}`,
     `API_TOKEN=${nextConfig.apiToken}`,
     `OBS_PORT=${nextConfig.obsPort}`,
+    `WARM_POD_ID=${nextConfig.warmPodId || ''}`,
     '',
   ].join('\n');
   fs.writeFileSync(envPath, content, 'utf8');
@@ -272,6 +279,7 @@ ipcMain.handle('get-app-config', async () => ({
   backendUrl: appConfig.backendUrl,
   apiToken: appConfig.apiToken,
   obsPort: appConfig.obsPort,
+  warmPodId: appConfig.warmPodId,
   configPath: resolveWritableEnvPath(),
   obsUrl: `http://localhost:${appConfig.obsPort}`,
 }));
@@ -295,9 +303,29 @@ ipcMain.handle('save-app-config', async (_event, nextConfig) => {
     backendUrl: appConfig.backendUrl,
     apiToken: appConfig.apiToken,
     obsPort: appConfig.obsPort,
+    warmPodId: appConfig.warmPodId,
     configPath: resolveWritableEnvPath(),
     obsUrl: `http://localhost:${appConfig.obsPort}`,
   };
+});
+
+ipcMain.handle('attach-warm-pod', async (_event, podId) => {
+  ensureBackendConfig();
+  const normalizedPodId = normalizePodId(podId);
+  if (!normalizedPodId) {
+    throw new Error('Pod ID is required');
+  }
+
+  const res = await axios.post(
+    `${appConfig.backendUrl}/attach-pod`,
+    { podId: normalizedPodId },
+    { headers: { ...getHeaders(), 'Content-Type': 'application/json' }, timeout: 30000 },
+  );
+
+  appConfig.warmPodId = normalizedPodId;
+  writeConfigFile(appConfig);
+
+  return res.data;
 });
 
 // Renderer sends each swapped JPEG blob as a data-URL; we push it to OBS clients

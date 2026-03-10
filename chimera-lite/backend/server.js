@@ -3,6 +3,8 @@ const cors = require('cors');
 const multer = require('multer');
 const axios = require('axios');
 const FormData = require('form-data');
+const fs = require('fs');
+const path = require('path');
 const config = require('./config');
 const { startPod, stopPod, getPodStatus, extractEndpoint } = require('./gpuProvider');
 
@@ -11,6 +13,7 @@ app.use(cors());
 app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
+const sessionStatePath = path.resolve(process.cwd(), config.SESSION_STATE_FILE);
 
 // --- Session State ---
 let activeSession = null; // { podId, endpoint: { ip, port }, timeoutHandle }
@@ -32,50 +35,36 @@ function requireToken(req, res, next) {
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 // GET /status
-app.get('/status', requireToken, (req, res) => {
-  if (!activeSession) {
+app.get('/status', requireToken, async (req, res) => {
+  const session = await getOrRecoverActiveSession();
+  if (!session) {
     return res.json({ active: false, streamProfile });
   }
-  res.json({ active: true, podId: activeSession.podId, endpoint: activeSession.endpoint, streamProfile });
+  res.json({ active: true, podId: session.podId, endpoint: session.endpoint, streamProfile, reused: true });
 });
 
 // POST /start — provision GPU pod
 app.post('/start', requireToken, async (req, res) => {
-  if (activeSession) {
-    return res.status(409).json({ error: 'Session already active', endpoint: activeSession.endpoint });
-  }
-
   try {
+    const existingSession = await getOrRecoverActiveSession();
+    if (existingSession) {
+      return res.json({ ok: true, reused: true, podId: existingSession.podId, endpoint: existingSession.endpoint });
+    }
+
     const pod = await startPod();
     const podId = pod.id;
 
     // Poll until the pod is running and we have a public port (~1-2 min)
     const endpoint = await pollForEndpoint(podId);
 
-    // Safety timeout — kill pod after 3 hours even if client crashes
-    const timeoutHandle = setTimeout(async () => {
-      console.log('Session timeout — terminating pod', podId);
-      await stopPod(podId).catch(console.error);
-      activeSession = null;
-    }, config.SESSION_TIMEOUT_MS);
-
-    activeSession = { podId, endpoint, timeoutHandle, serverReady: false };
+    setActiveSession({ podId, endpoint, serverReady: false });
 
     // Return endpoint immediately — client can show progress while server boots.
     // Inference server readiness check runs in background.
     res.json({ ok: true, podId, endpoint });
 
     // Background: wait for inference server then forward face if needed
-    waitForInferenceServer(endpoint)
-      .then(async () => {
-        if (activeSession) activeSession.serverReady = true;
-        console.log('Inference server ready.');
-        await forwardProfileToGpu(endpoint, streamProfile).catch(console.error);
-        if (uploadedFaceBuffer) {
-          await forwardFaceToGpu(endpoint, uploadedFaceBuffer).catch(console.error);
-        }
-      })
-      .catch(err => console.error('Inference server never became ready:', err.message));
+    ensureServerReadyBackground(activeSession);
 
   } catch (err) {
     console.error('Failed to start pod:', err.message);
@@ -83,22 +72,43 @@ app.post('/start', requireToken, async (req, res) => {
   }
 });
 
+// POST /attach-pod — adopt an already-running pod as the managed warm pod
+app.post('/attach-pod', requireToken, async (req, res) => {
+  const podId = String(req.body?.podId || '').trim();
+  if (!podId) {
+    return res.status(400).json({ error: 'podId is required' });
+  }
+
+  try {
+    const session = await adoptExistingPod(podId, { persistWarmPodId: true });
+    if (!session) {
+      return res.status(404).json({ error: 'Pod is not reachable on port 8765' });
+    }
+    res.json({ ok: true, podId: session.podId, endpoint: session.endpoint, attached: true });
+  } catch (err) {
+    console.error('Failed to attach pod:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /ready — is the inference server actually accepting connections?
 app.get('/ready', requireToken, async (req, res) => {
-  if (!activeSession) return res.json({ ready: false, reason: 'no_session' });
-  if (activeSession.serverReady) return res.json({ ready: true });
+  const session = await getOrRecoverActiveSession();
+  if (!session) return res.json({ ready: false, reason: 'no_session' });
+  if (session.serverReady) return res.json({ ready: true, reused: true });
   // Do a live check in case the background task already finished
-  const url = `http://${activeSession.endpoint.ip}:${activeSession.endpoint.port}/health`;
+  const url = `http://${session.endpoint.ip}:${session.endpoint.port}/health`;
   try {
     const r = await axios.get(url, { timeout: 3000 });
     if (r.data.ok) {
-      activeSession.serverReady = true;
+      session.serverReady = true;
+      saveSessionState(session);
       // Forward face now if it was uploaded before server was ready
       if (uploadedFaceBuffer) {
-        forwardFaceToGpu(activeSession.endpoint, uploadedFaceBuffer).catch(console.error);
+        forwardFaceToGpu(session.endpoint, uploadedFaceBuffer).catch(console.error);
       }
-      forwardProfileToGpu(activeSession.endpoint, streamProfile).catch(console.error);
-      return res.json({ ready: true });
+      forwardProfileToGpu(session.endpoint, streamProfile).catch(console.error);
+      return res.json({ ready: true, reused: true });
     }
   } catch (_) {}
   res.json({ ready: false, reason: 'starting' });
@@ -118,27 +128,28 @@ app.post('/stream-profile', requireToken, async (req, res) => {
 
   streamProfile = profile;
 
-  if (activeSession && activeSession.serverReady) {
+  const session = await getOrRecoverActiveSession();
+  if (session && session.serverReady) {
     try {
-      await forwardProfileToGpu(activeSession.endpoint, streamProfile);
+      await forwardProfileToGpu(session.endpoint, streamProfile);
     } catch (err) {
       console.error('Failed to forward stream profile to GPU:', err.message);
       return res.status(502).json({ error: 'Stored locally but failed to forward to GPU' });
     }
   }
 
-  res.json({ ok: true, profile: streamProfile, forwarded: !!(activeSession && activeSession.serverReady) });
+  res.json({ ok: true, profile: streamProfile, forwarded: !!(session && session.serverReady) });
 });
 
 // POST /stop — destroy GPU pod
 app.post('/stop', requireToken, async (req, res) => {
-  if (!activeSession) {
+  const session = await getOrRecoverActiveSession();
+  if (!session) {
     return res.status(404).json({ error: 'No active session' });
   }
 
-  const { podId, timeoutHandle } = activeSession;
-  clearTimeout(timeoutHandle);
-  activeSession = null;
+  const { podId } = session;
+  clearActiveSession();
 
   res.json({ ok: true });
   stopPod(podId).catch(err => console.error('Failed to terminate pod (may already be gone):', err.message));
@@ -152,19 +163,162 @@ app.post('/upload-face', requireToken, upload.single('face'), async (req, res) =
 
   uploadedFaceBuffer = req.file.buffer;
 
-  if (activeSession) {
+  const session = await getOrRecoverActiveSession();
+  if (session && session.serverReady) {
     try {
-      await forwardFaceToGpu(activeSession.endpoint, uploadedFaceBuffer);
+      await forwardFaceToGpu(session.endpoint, uploadedFaceBuffer);
     } catch (err) {
       console.error('Failed to forward face to GPU:', err.message);
       return res.status(502).json({ error: 'Stored locally but failed to forward to GPU' });
     }
   }
 
-  res.json({ ok: true, forwarded: !!activeSession });
+  res.json({ ok: true, forwarded: !!(session && session.serverReady) });
 });
 
 // --- Helpers ---
+
+function getSessionSnapshot(session) {
+  if (!session) return null;
+  return {
+    podId: session.podId,
+    endpoint: session.endpoint,
+    serverReady: !!session.serverReady,
+  };
+}
+
+function readSessionState() {
+  try {
+    if (!fs.existsSync(sessionStatePath)) return null;
+    return JSON.parse(fs.readFileSync(sessionStatePath, 'utf8'));
+  } catch (err) {
+    console.error('Failed to read session state:', err.message);
+    return null;
+  }
+}
+
+function saveSessionState(session) {
+  try {
+    fs.writeFileSync(sessionStatePath, JSON.stringify(getSessionSnapshot(session), null, 2));
+  } catch (err) {
+    console.error('Failed to write session state:', err.message);
+  }
+}
+
+function clearSessionState() {
+  try {
+    if (fs.existsSync(sessionStatePath)) {
+      fs.unlinkSync(sessionStatePath);
+    }
+  } catch (err) {
+    console.error('Failed to clear session state:', err.message);
+  }
+}
+
+function scheduleSessionTimeout(podId) {
+  return setTimeout(async () => {
+    console.log('Session timeout — terminating pod', podId);
+    await stopPod(podId).catch(console.error);
+    if (activeSession?.podId === podId) {
+      clearActiveSession();
+    }
+  }, config.SESSION_TIMEOUT_MS);
+}
+
+function setActiveSession(session) {
+  if (activeSession?.timeoutHandle) {
+    clearTimeout(activeSession.timeoutHandle);
+  }
+  activeSession = {
+    ...session,
+    serverReady: !!session.serverReady,
+    timeoutHandle: scheduleSessionTimeout(session.podId),
+  };
+  saveSessionState(activeSession);
+  return activeSession;
+}
+
+function clearActiveSession() {
+  if (activeSession?.timeoutHandle) {
+    clearTimeout(activeSession.timeoutHandle);
+  }
+  activeSession = null;
+  clearSessionState();
+}
+
+async function adoptExistingPod(podId, options = {}) {
+  const pod = await getPodStatus(podId);
+  const endpoint = extractEndpoint(pod);
+  const desiredStatus = String(pod?.desiredStatus || '').toUpperCase();
+  if (!endpoint || ['EXITED', 'FAILED', 'TERMINATED'].includes(desiredStatus)) {
+    return null;
+  }
+
+  const session = setActiveSession({ podId, endpoint, serverReady: false });
+  if (options.persistWarmPodId) {
+    console.log(`Warm pod attached manually: ${podId}`);
+  } else {
+    console.log(`Warm pod recovered: ${podId}`);
+  }
+  ensureServerReadyBackground(session);
+  return session;
+}
+
+async function verifySessionStillLive(session) {
+  try {
+    const pod = await getPodStatus(session.podId);
+    const endpoint = extractEndpoint(pod);
+    const desiredStatus = String(pod?.desiredStatus || '').toUpperCase();
+    if (!endpoint || ['EXITED', 'FAILED', 'TERMINATED'].includes(desiredStatus)) {
+      clearActiveSession();
+      return null;
+    }
+
+    session.endpoint = endpoint;
+    saveSessionState(session);
+    return session;
+  } catch (err) {
+    console.error('Failed to verify session state:', err.message);
+    clearActiveSession();
+    return null;
+  }
+}
+
+async function getOrRecoverActiveSession() {
+  if (activeSession) {
+    return verifySessionStillLive(activeSession);
+  }
+
+  const persistedSession = readSessionState();
+  const candidatePodIds = [persistedSession?.podId, config.RUNPOD_WARM_POD_ID].filter(Boolean);
+  for (const podId of [...new Set(candidatePodIds)]) {
+    try {
+      const session = await adoptExistingPod(podId);
+      if (session) return session;
+    } catch (err) {
+      console.error(`Failed to recover warm pod ${podId}:`, err.message);
+    }
+  }
+
+  clearSessionState();
+  return null;
+}
+
+function ensureServerReadyBackground(session) {
+  const { podId, endpoint } = session;
+  waitForInferenceServer(endpoint)
+    .then(async () => {
+      if (!activeSession || activeSession.podId !== podId) return;
+      activeSession.serverReady = true;
+      saveSessionState(activeSession);
+      console.log('Inference server ready.');
+      await forwardProfileToGpu(endpoint, streamProfile).catch(console.error);
+      if (uploadedFaceBuffer) {
+        await forwardFaceToGpu(endpoint, uploadedFaceBuffer).catch(console.error);
+      }
+    })
+    .catch(err => console.error('Inference server never became ready:', err.message));
+}
 
 async function pollForEndpoint(podId, maxWaitMs = 20 * 60 * 1000, intervalMs = 5000) {
   const deadline = Date.now() + maxWaitMs;
@@ -217,4 +371,5 @@ function sleep(ms) {
 // --- Start ---
 app.listen(config.PORT, () => {
   console.log(`Chimera Lite backend running on port ${config.PORT}`);
+  getOrRecoverActiveSession().catch(err => console.error('Warm pod recovery failed:', err.message));
 });
