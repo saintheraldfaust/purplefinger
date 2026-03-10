@@ -28,8 +28,8 @@ STREAM_PROFILES = {
         'detect_every_n': 6,
         'smooth_alpha': 0.45,
         'stale_face_ttl': 12,
-        'proc_w': 640,
-        'proc_h': 360,
+        'proc_w': 512,
+        'proc_h': 288,
         'jpeg_quality': 85,
     },
     'quality': {

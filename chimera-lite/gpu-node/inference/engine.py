@@ -195,12 +195,15 @@ class SwapEngine:
 
     def _make_blend_cache_key(self, face, h, w):
         bbox = np.asarray(getattr(face, 'bbox', np.zeros(4, dtype=np.float32)), dtype=np.float32)
-        bbox_key = tuple(np.round(bbox / 4.0).astype(np.int32).tolist())
+        # ÷16 rounding: cache hits whenever bbox drifts <8px — EMA-smoothed bbox
+        # moves only a few px per frame, so ÷4 caused cache misses every 1-2 frames
+        # triggering expensive distanceTransform + GaussianBlur recomputes (~50-90ms).
+        bbox_key = tuple(np.round(bbox / 16.0).astype(np.int32).tolist())
 
         kps = getattr(face, 'kps', None)
         if kps is not None:
             kps_arr = np.asarray(kps, dtype=np.float32)[:5]
-            kps_key = tuple(np.round(kps_arr.reshape(-1) / 4.0).astype(np.int32).tolist())
+            kps_key = tuple(np.round(kps_arr.reshape(-1) / 16.0).astype(np.int32).tolist())
         else:
             kps_key = ()
 

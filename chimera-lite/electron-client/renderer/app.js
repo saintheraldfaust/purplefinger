@@ -163,8 +163,8 @@ const STREAM_PROFILES = {
     minFps: 15,
     headroom: 1,
     quality: 0.78,
-    width: 640,
-    height: 360,
+    width: 512,
+    height: 288,
     summary: 'Realtime mode prioritizes steadier motion with lighter detection cadence, mild low-light compensation, and no enhancement overhead.',
   },
   quality: {
