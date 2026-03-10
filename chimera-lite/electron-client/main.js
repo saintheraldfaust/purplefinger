@@ -5,7 +5,12 @@ const axios = require('axios');
 const http = require('http');
 const dotenv = require('dotenv');
 
+function resolveUserEnvPath() {
+  return path.join(app.getPath('userData'), '.env');
+}
+
 const envCandidates = [
+  resolveUserEnvPath(),
   path.join(process.cwd(), '.env'),
   path.join(__dirname, '.env'),
   path.join(path.dirname(app.getPath('exe')), '.env'),
@@ -19,9 +24,7 @@ for (const envPath of envCandidates) {
 }
 
 function resolveWritableEnvPath() {
-  return app.isPackaged
-    ? path.join(path.dirname(app.getPath('exe')), '.env')
-    : path.join(__dirname, '.env');
+  return resolveUserEnvPath();
 }
 
 function normalizeBaseUrl(url) {
@@ -69,6 +72,7 @@ function validateConfig(nextConfig) {
 
 function writeConfigFile(nextConfig) {
   const envPath = resolveWritableEnvPath();
+  fs.mkdirSync(path.dirname(envPath), { recursive: true });
   const content = [
     `BACKEND_URL=${nextConfig.backendUrl}`,
     `API_TOKEN=${nextConfig.apiToken}`,

@@ -5,11 +5,15 @@ set -e
 
 echo "=== Chimera Lite Bootstrap ==="
 
+ensure_apt_packages() {
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+}
+
 # --- [0/4] System packages ---
 if ! command -v git &>/dev/null || ! command -v wget &>/dev/null; then
   echo "[0/4] Installing system packages..."
-  DEBIAN_FRONTEND=noninteractive apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wget git build-essential libgl1 libglib2.0-0
+  ensure_apt_packages wget git build-essential libgl1 libglib2.0-0 python3-venv
 else
   echo "[0/4] System packages present -- skipping apt."
 fi
@@ -25,26 +29,50 @@ PIP=$(which pip3 2>/dev/null || which pip)
 echo "[0/4] Python: $PYTHON ($($PYTHON --version 2>&1))  pip: $PIP"
 
 # --- [1/4] Python packages ---
-# Install to system Python on every boot (packages are ephemeral per container).
-# Volume is used as pip download cache: first boot downloads, every boot after
-# that installs from cached wheels in ~60 sec -- no import path tricks needed.
-echo "[1/4] Installing Python packages..."
-# Volume cache: first boot downloads (~5 min), subsequent boots install from cache (~60 sec)
-unset PIP_CACHE_DIR
-$PIP install --quiet --cache-dir "$WORKSPACE/.cache/pip" \
-  insightface \
-  onnxruntime-gpu \
-  aiohttp \
-  aiohttp-cors \
-  opencv-python-headless \
-  Pillow \
-  basicsr \
-  facexlib \
-  gfpgan \
-  realesrgan
+if ! $PYTHON -m venv --help >/dev/null 2>&1; then
+  echo "[1/4] python venv module missing -- installing python3-venv..."
+  ensure_apt_packages python3-venv
+fi
 
-# Fix basicsr compatibility with torchvision >= 0.16
-$PYTHON - <<'PYEOF'
+BOOTSTRAP_REQS_FILE="$WORKSPACE/.cache/chimera-lite-bootstrap-requirements.txt"
+VENV_DIR="$WORKSPACE/.venvs/chimera-lite"
+VENV_PYTHON="$VENV_DIR/bin/python"
+VENV_PIP="$VENV_DIR/bin/pip"
+REQ_HASH_FILE="$VENV_DIR/.bootstrap-requirements.sha256"
+
+mkdir -p "$WORKSPACE/.cache" "$WORKSPACE/.venvs"
+cat > "$BOOTSTRAP_REQS_FILE" <<'REQEOF'
+insightface
+onnxruntime-gpu
+aiohttp
+aiohttp-cors
+opencv-python-headless
+Pillow
+basicsr
+facexlib
+gfpgan
+realesrgan
+REQEOF
+
+CURRENT_REQ_HASH=$(sha256sum "$BOOTSTRAP_REQS_FILE" | awk '{print $1}')
+INSTALLED_REQ_HASH=""
+if [ -f "$REQ_HASH_FILE" ]; then
+  INSTALLED_REQ_HASH=$(cat "$REQ_HASH_FILE" 2>/dev/null || true)
+fi
+
+if [ ! -x "$VENV_PYTHON" ]; then
+  echo "[1/4] Creating persistent virtualenv on volume..."
+  $PYTHON -m venv "$VENV_DIR"
+fi
+
+if [ "$CURRENT_REQ_HASH" != "$INSTALLED_REQ_HASH" ]; then
+  echo "[1/4] Installing Python packages into persistent volume env..."
+  unset PIP_CACHE_DIR
+  $VENV_PIP install --quiet --upgrade pip setuptools wheel
+  $VENV_PIP install --quiet --cache-dir "$WORKSPACE/.cache/pip" -r "$BOOTSTRAP_REQS_FILE"
+
+  # Fix basicsr compatibility with torchvision >= 0.16
+  $VENV_PYTHON - <<'PYEOF'
 import site, os
 for d in site.getsitepackages():
     f = os.path.join(d, 'basicsr/data/degradations.py')
@@ -57,6 +85,13 @@ for d in site.getsitepackages():
         print('Fixed basicsr degradations.py')
         break
 PYEOF
+  printf '%s' "$CURRENT_REQ_HASH" > "$REQ_HASH_FILE"
+else
+  echo "[1/4] Persistent Python env already matches requirements -- skipping install."
+fi
+
+PYTHON="$VENV_PYTHON"
+PIP="$VENV_PIP"
 
 echo "[1/4] Packages ready."
 
