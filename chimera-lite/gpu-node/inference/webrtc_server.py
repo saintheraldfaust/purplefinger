@@ -1,13 +1,15 @@
 """
-Chimera Lite v1.1 — GPU Node WebSocket + HTTP Server
+Chimera Lite v1.1 — GPU Node WebRTC DataChannel + HTTP Server
 
-Client sends raw camera frames as binary JPEG over WebSocket.
-Server runs face-swap pipeline and returns processed JPEG.
-No TURN/STUN needed — plain TCP over the port RunPod already maps.
+Client sends raw camera JPEG frames over a WebRTC DataChannel (unreliable,
+unordered — UDP semantics). Server runs face-swap pipeline and sends back
+processed JPEG over the same channel. No TURN needed for RunPod pods with a
+direct public IP.
 
 Endpoints:
-  WS   /ws        — bidirectional JPEG frame stream
+  POST /offer     — SDP offer/answer exchange (vanilla ICE)
   POST /set-face  — receive identity image from backend
+  POST /set-mode  — switch stream profile
   GET  /health    — liveness check
 """
 
@@ -20,8 +22,9 @@ import threading
 
 import cv2
 import numpy as np
-from aiohttp import web, WSMsgType
+from aiohttp import web
 import aiohttp_cors
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pipeline import FaceSwapPipeline, PipelineConfig
@@ -38,6 +41,7 @@ else:
 
 # --- Global state ---
 pipeline = FaceSwapPipeline(PipelineConfig())
+pcs: set = set()  # active RTCPeerConnections
 
 # Pre-warm CUDA allocator so the first client frame doesn't pay JIT cost
 def _cuda_warmup():
@@ -54,11 +58,12 @@ def _cuda_warmup():
 
 threading.Thread(target=_cuda_warmup, daemon=True).start()
 
-# FPS tracking (module-level so it persists across frames)
-_fps_frame_count = 0
-_fps_window_start = 0.0
 # Cache JPEG encode param lists to avoid repeated list allocation
 _jpeg_params_cache: dict = {}
+
+# FPS tracking (module-level, resets per 30-frame window)
+_fps_frame_count = 0
+_fps_window_start = 0.0
 
 
 def _full_pipeline(raw_bytes: bytes):
@@ -100,82 +105,119 @@ def _full_pipeline(raw_bytes: bytes):
     return buf.tobytes(), frame_ms
 
 
-# --- WebSocket stream handler ---
-async def handle_ws(request):
+# --- WebRTC signalling ---
+
+_RTC_CONFIG = RTCConfiguration(
+    iceServers=[RTCIceServer(urls=['stun:stun.l.google.com:19302'])]
+)
+
+
+async def handle_offer(request):
     global _fps_frame_count, _fps_window_start
 
-    ws = web.WebSocketResponse(max_msg_size=5 * 1024 * 1024)
-    await ws.prepare(request)
-    log.info('WS connected from %s', request.remote)
-
-    # Single-slot buffer: newest frame always wins, stale frames are dropped.
-    latest = [None]
-    frame_event = asyncio.Event()
-
-    _recv_count = 0
-    _recv_t0 = [0.0]
-
-    async def process_loop():
-        global _fps_frame_count, _fps_window_start
-        while not ws.closed:
-            await frame_event.wait()
-            frame_event.clear()
-            raw_bytes = latest[0]
-            if raw_bytes is None:
-                continue
-            latest[0] = None
-
-            try:
-                t_submit = time.perf_counter()
-                buf, frame_ms = await asyncio.to_thread(_full_pipeline, raw_bytes)
-            except Exception as e:
-                log.warning('Frame error: %s', e)
-                continue
-
-            if buf is None:
-                continue
-
-            try:
-                await ws.send_bytes(buf)
-            except Exception:
-                break
-
-            _fps_frame_count += 1
-            now = time.perf_counter()
-            if _fps_window_start == 0.0:
-                _fps_window_start = now
-            elif _fps_frame_count % 30 == 0:
-                fps = 30.0 / max(now - _fps_window_start, 1e-6)
-                recv_fps = _recv_count / max(now - _recv_t0[0], 1e-6) if _recv_t0[0] else 0
-                total_ms = (now - t_submit) * 1000
-                log.info(
-                    'out FPS=%.1f  in FPS=%.1f  process=%.0fms  total=%.0fms',
-                    fps, recv_fps, frame_ms, total_ms,
-                )
-                _fps_window_start = now
-
-    proc_task = asyncio.create_task(process_loop())
     try:
-        async for msg in ws:
-            if msg.type == WSMsgType.BINARY:
-                # Store raw bytes — decode happens inside the thread, not on the event loop
-                latest[0] = bytes(msg.data)
-                _recv_count += 1
-                if _recv_t0[0] == 0.0:
-                    _recv_t0[0] = time.perf_counter()
-                frame_event.set()
-            elif msg.type == WSMsgType.ERROR:
-                log.error('WS error: %s', ws.exception())
-                break
-    finally:
-        proc_task.cancel()
-        try:
-            await proc_task
-        except asyncio.CancelledError:
-            pass
+        params = await request.json()
+    except Exception:
+        return web.json_response({'error': 'Invalid JSON'}, status=400)
 
-    log.info('WS client disconnected')
-    return ws
+    offer = RTCSessionDescription(sdp=params['sdp'], type=params['type'])
+
+    pc = RTCPeerConnection(configuration=_RTC_CONFIG)
+    pc_id = f'pc-{id(pc)}'
+    pcs.add(pc)
+    log.info('%s created', pc_id)
+
+    @pc.on('connectionstatechange')
+    async def on_connectionstatechange():
+        log.info('%s state → %s', pc_id, pc.connectionState)
+        if pc.connectionState in ('failed', 'closed', 'disconnected'):
+            await pc.close()
+            pcs.discard(pc)
+
+    @pc.on('datachannel')
+    def on_datachannel(channel):
+        global _fps_frame_count, _fps_window_start
+        log.info('%s datachannel "%s" opened', pc_id, channel.label)
+
+        # Single-slot frame buffer: newest frame wins, stale frames are dropped.
+        latest: list = [None]
+        frame_event = asyncio.Event()
+        _recv_count = 0
+        _recv_t0: list = [0.0]
+
+        async def process_loop():
+            global _fps_frame_count, _fps_window_start
+            while True:
+                # Wait for a new frame with a keepalive timeout
+                try:
+                    await asyncio.wait_for(frame_event.wait(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    if channel.readyState != 'open':
+                        break
+                    continue
+
+                frame_event.clear()
+                raw_bytes = latest[0]
+                if raw_bytes is None:
+                    continue
+                latest[0] = None
+
+                t_submit = time.perf_counter()
+                try:
+                    buf, frame_ms = await asyncio.to_thread(_full_pipeline, raw_bytes)
+                except Exception as e:
+                    log.warning('Frame error: %s', e)
+                    continue
+
+                if buf is None:
+                    continue
+
+                try:
+                    channel.send(buf)
+                except Exception as e:
+                    log.warning('Send error: %s', e)
+                    break
+
+                _fps_frame_count += 1
+                now = time.perf_counter()
+                if _fps_window_start == 0.0:
+                    _fps_window_start = now
+                elif _fps_frame_count % 30 == 0:
+                    fps = 30.0 / max(now - _fps_window_start, 1e-6)
+                    recv_fps = _recv_count / max(now - _recv_t0[0], 1e-6) if _recv_t0[0] else 0
+                    total_ms = (now - t_submit) * 1000
+                    log.info(
+                        'out FPS=%.1f  in FPS=%.1f  process=%.0fms  total=%.0fms',
+                        fps, recv_fps, frame_ms, total_ms,
+                    )
+                    _fps_window_start = now
+
+        # Start the process loop immediately — it waits for frame_event
+        asyncio.ensure_future(process_loop())
+
+        @channel.on('message')
+        def on_message(message):
+            nonlocal _recv_count
+            if not isinstance(message, (bytes, bytearray)):
+                return
+            latest[0] = bytes(message)
+            _recv_count += 1
+            if _recv_t0[0] == 0.0:
+                _recv_t0[0] = time.perf_counter()
+            frame_event.set()
+
+        @channel.on('close')
+        def on_close():
+            log.info('%s datachannel closed', pc_id)
+
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+
+    return web.json_response({
+        'sdp': pc.localDescription.sdp,
+        'type': pc.localDescription.type,
+    })
 
 
 # --- Face upload ---
@@ -217,15 +259,27 @@ async def handle_health(request):
     return web.json_response({'ok': True, 'face_set': pipeline.ready, 'profile': pipeline.profile})
 
 
+# --- Shutdown ---
+async def on_shutdown(app):
+    await asyncio.gather(*[pc.close() for pc in pcs], return_exceptions=True)
+    pcs.clear()
+
+
 # --- App setup ---
 def build_app():
     app = web.Application(client_max_size=10 * 1024 * 1024)
+    app.on_shutdown.append(on_shutdown)
 
     cors = aiohttp_cors.setup(app, defaults={
-        '*': aiohttp_cors.ResourceOptions(allow_credentials=True, expose_headers='*', allow_headers='*')
+        '*': aiohttp_cors.ResourceOptions(
+            allow_credentials=True,
+            expose_headers='*',
+            allow_headers='*',
+            allow_methods=['POST', 'GET', 'OPTIONS'],
+        )
     })
 
-    cors.add(app.router.add_get('/ws', handle_ws))
+    cors.add(app.router.add_post('/offer', handle_offer))
     cors.add(app.router.add_post('/set-face', handle_set_face))
     cors.add(app.router.add_post('/set-mode', handle_set_mode))
     cors.add(app.router.add_get('/health', handle_health))
