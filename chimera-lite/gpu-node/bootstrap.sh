@@ -37,7 +37,6 @@ fi
 BOOTSTRAP_REQS_FILE="$WORKSPACE/.cache/chimera-lite-bootstrap-requirements.txt"
 VENV_DIR="$WORKSPACE/.venvs/chimera-lite"
 VENV_PYTHON="$VENV_DIR/bin/python"
-VENV_PIP="$VENV_DIR/bin/pip"
 REQ_HASH_FILE="$VENV_DIR/.bootstrap-requirements.sha256"
 
 mkdir -p "$WORKSPACE/.cache" "$WORKSPACE/.venvs"
@@ -65,11 +64,24 @@ if [ ! -x "$VENV_PYTHON" ]; then
   $PYTHON -m venv "$VENV_DIR"
 fi
 
+if [ ! -x "$VENV_PYTHON" ]; then
+  echo "[1/4] Virtualenv python missing after creation attempt -- recreating..."
+  rm -rf "$VENV_DIR"
+  $PYTHON -m venv "$VENV_DIR"
+fi
+
+if ! "$VENV_PYTHON" -m pip --version >/dev/null 2>&1; then
+  echo "[1/4] Virtualenv pip missing or broken -- repairing env..."
+  rm -rf "$VENV_DIR"
+  $PYTHON -m venv "$VENV_DIR"
+  "$VENV_PYTHON" -m ensurepip --upgrade >/dev/null 2>&1 || true
+fi
+
 if [ "$CURRENT_REQ_HASH" != "$INSTALLED_REQ_HASH" ]; then
   echo "[1/4] Installing Python packages into persistent volume env..."
   unset PIP_CACHE_DIR
-  $VENV_PIP install --quiet --upgrade pip setuptools wheel
-  $VENV_PIP install --quiet --cache-dir "$WORKSPACE/.cache/pip" -r "$BOOTSTRAP_REQS_FILE"
+  "$VENV_PYTHON" -m pip install --quiet --upgrade pip setuptools wheel
+  "$VENV_PYTHON" -m pip install --quiet --cache-dir "$WORKSPACE/.cache/pip" -r "$BOOTSTRAP_REQS_FILE"
 
   # Fix basicsr compatibility with torchvision >= 0.16
   $VENV_PYTHON - <<'PYEOF'
@@ -91,7 +103,7 @@ else
 fi
 
 PYTHON="$VENV_PYTHON"
-PIP="$VENV_PIP"
+PIP="$VENV_PYTHON -m pip"
 
 echo "[1/4] Packages ready."
 
