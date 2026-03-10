@@ -39,7 +39,7 @@ MODELS_DIR="$WORKSPACE/models"
 CODE_DIR="/app"
 REPO_URL="https://github.com/saintheraldfaust/purplefinger.git"
 RUNTIME_REQS_FILE="/opt/chimera/requirements.txt"
-mkdir -p "$MODELS_DIR" "$CODE_DIR"
+mkdir -p "$MODELS_DIR" "$MODELS_DIR/trt_cache" "$CODE_DIR"
 
 PYTHON=$(which python3 2>/dev/null || which python)
 PIP=$(which pip3 2>/dev/null || which pip)

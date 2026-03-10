@@ -328,10 +328,12 @@ ipcMain.handle('attach-warm-pod', async (_event, podId) => {
   return res.data;
 });
 
-// Renderer sends each swapped JPEG blob as a data-URL; we push it to OBS clients
-ipcMain.on('obs-frame', (_event, dataUrl) => {
+// Renderer sends each swapped JPEG frame as a raw ArrayBuffer.
+// We base64-encode here (Node.js Buffer is faster than renderer FileReader) and push to OBS SSE clients.
+ipcMain.on('obs-frame', (_event, data) => {
   if (obsClients.size === 0) return;
-  const msg = `event: frame\ndata: ${dataUrl}\n\n`;
+  const b64 = Buffer.from(data).toString('base64');
+  const msg = `event: frame\ndata: data:image/jpeg;base64,${b64}\n\n`;
   for (const client of obsClients) {
     try { client.write(msg); } catch { obsClients.delete(client); }
   }

@@ -25,9 +25,9 @@ STREAM_PROFILES = {
     'realtime': {
         'enhance_enabled': False,
         'enhance_every_n': 0,
-        'detect_every_n': 2,
+        'detect_every_n': 4,
         'smooth_alpha': 0.45,
-        'stale_face_ttl': 4,
+        'stale_face_ttl': 8,
         'proc_w': 512,
         'proc_h': 288,
         'jpeg_quality': 79,

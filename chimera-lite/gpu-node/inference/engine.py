@@ -43,36 +43,52 @@ class SwapEngine:
         from insightface.app import FaceAnalysis
 
         log.info('Loading InsightFace buffalo_l...')
-        # Cache models on volume so they survive pod restarts
         os.environ.setdefault('INSIGHTFACE_HOME', '/workspace/.insightface')
         ort_providers = ort.get_available_providers()
         log.info('onnxruntime available providers: %s', ort_providers)
         if 'CUDAExecutionProvider' not in ort_providers:
             raise RuntimeError(f'CUDAExecutionProvider not available in onnxruntime: {ort_providers}')
 
+        # TensorRT FP16 with engine caching — 2-3x faster than plain CUDA EP on RTX hardware.
+        # First run compiles TRT engines (~60-120s); subsequent runs load from cache instantly.
+        # Falls back to CUDAExecutionProvider automatically if TRT is unavailable.
+        os.makedirs('/workspace/models/trt_cache', exist_ok=True)
+        _gpu_providers = [
+            ('TensorrtExecutionProvider', {
+                'trt_fp16_enable': True,
+                'trt_max_workspace_size': 1 << 30,  # 1 GB
+                'trt_engine_cache_enable': True,
+                'trt_engine_cache_path': '/workspace/models/trt_cache',
+                'trt_timing_cache_enable': True,
+            }),
+            'CUDAExecutionProvider',
+            'CPUExecutionProvider',
+        ]
+
         self.source_app = FaceAnalysis(
             name='buffalo_l',
             allowed_modules=['detection', 'recognition', 'landmark_2d_106'],
-            providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
+            providers=_gpu_providers,
         )
         self.source_app.prepare(ctx_id=0, det_size=(320, 320))
 
         self.target_app = FaceAnalysis(
             name='buffalo_l',
             allowed_modules=['detection', 'landmark_2d_106'],
-            providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
+            providers=_gpu_providers,
         )
         self.target_app.prepare(ctx_id=0, det_size=(320, 320))  # 320 is fast enough for webcam faces
 
         log.info('Loading inswapper_128 from %s...', model_path)
         self.swapper = insightface.model_zoo.get_model(
             model_path,
-            providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
+            providers=_gpu_providers,
         )
         swapper_providers = self.swapper.session.get_providers()
         log.info('inswapper providers: %s', swapper_providers)
-        if 'CUDAExecutionProvider' not in swapper_providers:
-            raise RuntimeError(f'inswapper is not using CUDAExecutionProvider: {swapper_providers}')
+        _gpu_ep_names = {'TensorrtExecutionProvider', 'CUDAExecutionProvider'}
+        if not (_gpu_ep_names & set(swapper_providers)):
+            raise RuntimeError(f'inswapper is not using a GPU provider: {swapper_providers}')
 
         self._log_app_model_providers('source analysis', self.source_app)
         self._log_app_model_providers('target analysis', self.target_app)
@@ -249,12 +265,26 @@ class SwapEngine:
         blend_assets = self._get_blend_assets(local_face, roi_h, roi_w)
 
         swap_t0 = time.perf_counter()
-        swapped_roi = self.swapper.get(roi, local_face, self._source_face, paste_back=True)
+        swapped_face, affine = self.swapper.get(roi, local_face, self._source_face, paste_back=False)
+        inverse_affine = cv2.invertAffineTransform(np.asarray(affine, dtype=np.float32))
+        swapped_roi = cv2.warpAffine(
+            swapped_face,
+            inverse_affine,
+            (roi_w, roi_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0.0,
+        )
         swap_ms = (time.perf_counter() - swap_t0) * 1000
 
         blend_t0 = time.perf_counter()
         swapped_roi = self._match_face_tone(swapped_roi, local_face, blend_assets)
-        mask_f = blend_assets['blend_alpha']
+        valid_mask = (swapped_roi.sum(axis=2, keepdims=True) > 0).astype(np.float32)
+        if valid_mask.any():
+            valid_mask = cv2.GaussianBlur(valid_mask[:, :, 0], (21, 21), 4.0)[:, :, np.newaxis]
+            mask_f = np.minimum(blend_assets['blend_alpha'], valid_mask)
+        else:
+            mask_f = blend_assets['blend_alpha']
 
         out_roi = (
             swapped_roi.astype(np.float32) * mask_f +

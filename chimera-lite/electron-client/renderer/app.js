@@ -159,8 +159,8 @@ let lastLightProbeAt = 0;
 const STREAM_PROFILES = {
   realtime: {
     label: 'Realtime',
-    sendFps: 12,
-    minFps: 8,
+    sendFps: 20,
+    minFps: 15,
     headroom: 1,
     quality: 0.68,
     width: 512,
@@ -169,8 +169,8 @@ const STREAM_PROFILES = {
   },
   quality: {
     label: 'Quality',
-    sendFps: 10,
-    minFps: 6,
+    sendFps: 15,
+    minFps: 10,
     headroom: 1,
     quality: 0.78,
     width: 480,
@@ -295,7 +295,7 @@ function doCapture() {
       _encodes--;
       sentFrames++;
       if (blob && ws && ws.readyState === WebSocket.OPEN)
-        blob.arrayBuffer().then((buf) => ws.send(buf));
+        ws.send(blob);
     })
     .catch(() => _encodes--);
 }
@@ -497,19 +497,15 @@ async function startStreaming(ip, port) {
 
   ws.onmessage = (event) => {
     recvFrames++;
-    const blob = new Blob([event.data], { type: 'image/jpeg' });
-
-    // Display in the Electron window
-    createImageBitmap(blob).then((bitmap) => {
+    // Display in the Electron window — event.data is already ArrayBuffer
+    createImageBitmap(new Blob([event.data], { type: 'image/jpeg' })).then((bitmap) => {
       displayCtx.drawImage(bitmap, 0, 0, remoteCanvas.width, remoteCanvas.height);
       bitmap.close();
     });
 
-    // Push to OBS Browser Source (localhost:7891) via main process
-    // OBS captures your real mic separately — no audio work needed here
-    const reader = new FileReader();
-    reader.onload = () => window.chimera.obsFrame(reader.result);
-    reader.readAsDataURL(blob);
+    // Push to OBS Browser Source — send raw ArrayBuffer, main process base64-encodes it.
+    // Eliminates the async FileReader + dataURL string overhead on the render process.
+    window.chimera.obsFrame(event.data);
   };
 
   ws.onerror = () => setLog('Stream error — check GPU pod');

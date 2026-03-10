@@ -13,18 +13,16 @@ Endpoints:
 
 import sys
 import os
-
-# Fallback: add volume pyprefix to path in case bootstrap used --prefix
 import asyncio
 import logging
 import time
+import threading
 
 import cv2
 import numpy as np
 from aiohttp import web, WSMsgType
 import aiohttp_cors
 
-# Pipeline lives in the same directory as this file
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pipeline import FaceSwapPipeline, PipelineConfig
 
@@ -41,85 +39,65 @@ else:
 # --- Global state ---
 pipeline = FaceSwapPipeline(PipelineConfig())
 
+# Pre-warm CUDA allocator so the first client frame doesn't pay JIT cost
+def _cuda_warmup():
+    try:
+        if torch.cuda.is_available():
+            d = torch.zeros(1, 3, 128, 128, device='cuda')
+            _ = d * d
+            torch.cuda.synchronize()
+            del d
+            torch.cuda.empty_cache()
+            log.info('CUDA warmup complete')
+    except Exception as e:
+        log.warning('CUDA warmup skipped: %s', e)
+
+threading.Thread(target=_cuda_warmup, daemon=True).start()
+
 # FPS tracking (module-level so it persists across frames)
 _fps_frame_count = 0
 _fps_window_start = 0.0
-_jpeg_params_cache = {}
+# Cache JPEG encode param lists to avoid repeated list allocation
+_jpeg_params_cache: dict = {}
 
 
-def decode_latest_frame(frame_bytes: bytes):
-    decode_t0 = time.perf_counter()
-    arr = np.frombuffer(frame_bytes, dtype=np.uint8)
+def _full_pipeline(raw_bytes: bytes):
+    """
+    Runs entirely off the event loop (called via asyncio.to_thread).
+    decode → resize → GPU swap → resize → JPEG encode
+    Returns (buf_bytes, frame_ms) or (None, 0) on failure.
+    """
+    arr = np.frombuffer(raw_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
-        return None
+        return None, 0.0
 
     runtime = pipeline.get_runtime_settings()
     proc_w = runtime['proc_w']
     proc_h = runtime['proc_h']
     jpeg_quality = runtime['jpeg_quality']
 
-    h, w = img.shape[:2]
-    if w != proc_w or h != proc_h:
-        small = cv2.resize(img, (proc_w, proc_h), interpolation=cv2.INTER_LINEAR)
-    else:
-        small = img
-
-    return {
-        'small': small,
-        'orig_w': w,
-        'orig_h': h,
-        'proc_w': proc_w,
-        'proc_h': proc_h,
-        'jpeg_quality': jpeg_quality,
-        'decode_ms': (time.perf_counter() - decode_t0) * 1000,
-        'decoded_at': time.perf_counter(),
-    }
-
-
-def process_decoded_frame(frame_packet):
-    if frame_packet is None:
-        return None
+    orig_h, orig_w = img.shape[:2]
+    small = cv2.resize(img, (proc_w, proc_h), interpolation=cv2.INTER_LINEAR) \
+        if (orig_w != proc_w or orig_h != proc_h) else img
 
     t0 = time.perf_counter()
-    swapped_small = pipeline.process_frame(frame_packet['small'])
-    frame_packet['swapped_small'] = swapped_small
-    frame_packet['frame_ms'] = (time.perf_counter() - t0) * 1000
-    frame_packet['processed_at'] = time.perf_counter()
-    return frame_packet
+    swapped = pipeline.process_frame(small)
+    frame_ms = (time.perf_counter() - t0) * 1000
 
+    out = cv2.resize(swapped, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR) \
+        if (orig_w != proc_w or orig_h != proc_h) else swapped
 
-def encode_processed_frame(frame_packet):
-    if frame_packet is None:
-        return None
-
-    encode_t0 = time.perf_counter()
-    out = (
-        frame_packet['swapped_small']
-        if (frame_packet['orig_w'] == frame_packet['proc_w'] and frame_packet['orig_h'] == frame_packet['proc_h'])
-        else cv2.resize(
-            frame_packet['swapped_small'],
-            (frame_packet['orig_w'], frame_packet['orig_h']),
-            interpolation=cv2.INTER_LINEAR,
-        )
-    )
-    jpeg_quality = int(frame_packet['jpeg_quality'])
     jpeg_params = _jpeg_params_cache.get(jpeg_quality)
     if jpeg_params is None:
         jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
         _jpeg_params_cache[jpeg_quality] = jpeg_params
+
     ok, buf = cv2.imencode('.jpg', out, jpeg_params)
     if not ok:
-        return None
+        return None, 0.0
 
-    return {
-        'buf': buf.tobytes(),
-        'frame_ms': frame_packet['frame_ms'],
-        'decode_ms': frame_packet.get('decode_ms', 0.0),
-        'encode_ms': (time.perf_counter() - encode_t0) * 1000,
-        'pipeline_ms': (time.perf_counter() - frame_packet['decoded_at']) * 1000,
-        'produced_at': time.perf_counter(),
-    }
+    return buf.tobytes(), frame_ms
 
 
 # --- WebSocket stream handler ---
@@ -130,97 +108,35 @@ async def handle_ws(request):
     await ws.prepare(request)
     log.info('WS connected from %s', request.remote)
 
-    latest_in = [None]
-    latest_decoded = [None]
-    latest_processed = [None]
-    latest_out = [None]
-    recv_event = asyncio.Event()      # signals decode_loop immediately when frame bytes arrive
-    decoded_event = asyncio.Event()   # signals process_loop immediately when a decoded frame is ready
-    processed_event = asyncio.Event() # signals encode_loop immediately when a processed frame is ready
-    send_event = asyncio.Event()      # signals send_loop immediately when a processed frame is ready
+    # Single-slot buffer: newest frame always wins, stale frames are dropped.
+    latest = [None]
+    frame_event = asyncio.Event()
 
     _recv_count = 0
     _recv_t0 = [0.0]
 
-    async def decode_loop():
-        while not ws.closed:
-            await recv_event.wait()
-            recv_event.clear()
-
-            frame_bytes = latest_in[0]
-            if frame_bytes is None:
-                continue
-            latest_in[0] = None
-
-            try:
-                packet = await asyncio.to_thread(decode_latest_frame, frame_bytes)
-            except Exception as e:
-                log.warning('Decode error: %s', e)
-                continue
-
-            if packet is None:
-                continue
-
-            latest_decoded[0] = packet
-            decoded_event.set()
-
     async def process_loop():
-        while not ws.closed:
-            await decoded_event.wait()
-            decoded_event.clear()
-
-            frame_packet = latest_decoded[0]
-            if frame_packet is None:
-                continue
-            latest_decoded[0] = None
-
-            try:
-                packet = await asyncio.to_thread(process_decoded_frame, frame_packet)
-            except Exception as e:
-                log.warning('Process error: %s', e)
-                continue
-
-            if packet is None:
-                continue
-
-            latest_processed[0] = packet
-            processed_event.set()
-
-    async def encode_loop():
-        while not ws.closed:
-            await processed_event.wait()
-            processed_event.clear()
-
-            frame_packet = latest_processed[0]
-            if frame_packet is None:
-                continue
-            latest_processed[0] = None
-
-            try:
-                packet = await asyncio.to_thread(encode_processed_frame, frame_packet)
-            except Exception as e:
-                log.warning('Encode error: %s', e)
-                continue
-
-            if packet is None:
-                continue
-
-            latest_out[0] = packet
-            send_event.set()
-
-    async def send_loop():
         global _fps_frame_count, _fps_window_start
         while not ws.closed:
-            await send_event.wait()
-            send_event.clear()
-
-            packet = latest_out[0]
-            if packet is None:
+            await frame_event.wait()
+            frame_event.clear()
+            raw_bytes = latest[0]
+            if raw_bytes is None:
                 continue
-            latest_out[0] = None
+            latest[0] = None
 
             try:
-                await ws.send_bytes(packet['buf'])
+                t_submit = time.perf_counter()
+                buf, frame_ms = await asyncio.to_thread(_full_pipeline, raw_bytes)
+            except Exception as e:
+                log.warning('Frame error: %s', e)
+                continue
+
+            if buf is None:
+                continue
+
+            try:
+                await ws.send_bytes(buf)
             except Exception:
                 break
 
@@ -231,53 +147,30 @@ async def handle_ws(request):
             elif _fps_frame_count % 30 == 0:
                 fps = 30.0 / max(now - _fps_window_start, 1e-6)
                 recv_fps = _recv_count / max(now - _recv_t0[0], 1e-6) if _recv_t0[0] else 0
-                queue_ms = (now - packet['produced_at']) * 1000
+                total_ms = (now - t_submit) * 1000
                 log.info(
-                    'out FPS=%.1f  in FPS=%.1f  decode=%.0fms  process=%.0fms  encode=%.0fms  pipeline=%.0fms  send_wait=%.0fms',
-                    fps,
-                    recv_fps,
-                    packet.get('decode_ms', 0.0),
-                    packet['frame_ms'],
-                    packet.get('encode_ms', 0.0),
-                    packet.get('pipeline_ms', packet['frame_ms']),
-                    queue_ms,
+                    'out FPS=%.1f  in FPS=%.1f  process=%.0fms  total=%.0fms',
+                    fps, recv_fps, frame_ms, total_ms,
                 )
                 _fps_window_start = now
 
-    decode_task = asyncio.create_task(decode_loop())
     proc_task = asyncio.create_task(process_loop())
-    encode_task = asyncio.create_task(encode_loop())
-    send_task = asyncio.create_task(send_loop())
     try:
         async for msg in ws:
             if msg.type == WSMsgType.BINARY:
-                latest_in[0] = bytes(msg.data)
+                # Store raw bytes — decode happens inside the thread, not on the event loop
+                latest[0] = bytes(msg.data)
                 _recv_count += 1
                 if _recv_t0[0] == 0.0:
                     _recv_t0[0] = time.perf_counter()
-                recv_event.set()  # wake decode_loop immediately
+                frame_event.set()
             elif msg.type == WSMsgType.ERROR:
                 log.error('WS error: %s', ws.exception())
                 break
     finally:
-        decode_task.cancel()
         proc_task.cancel()
-        encode_task.cancel()
-        send_task.cancel()
-        try:
-            await decode_task
-        except asyncio.CancelledError:
-            pass
         try:
             await proc_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await encode_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await send_task
         except asyncio.CancelledError:
             pass
 
