@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 import torch
 import logging
+import copy
+import time
 
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True  # speed up conv ops after first frame
@@ -31,9 +33,12 @@ class SwapEngine:
     """
 
     DETECT_EVERY_N = 1   # per-profile; realtime can relax this for more FPS
+    ROI_EXPAND = 1.85
+    MIN_ROI_SIZE = 192
 
     def __init__(self, model_path: str = 'models/inswapper_128.onnx'):
         import insightface
+        import onnxruntime as ort
         from insightface.app import FaceAnalysis
         from insightface.model_zoo import model_zoo
 
@@ -41,6 +46,11 @@ class SwapEngine:
         # Cache models on volume so they survive pod restarts
         import os
         os.environ.setdefault('INSIGHTFACE_HOME', '/workspace/.insightface')
+        ort_providers = ort.get_available_providers()
+        log.info('onnxruntime available providers: %s', ort_providers)
+        if 'CUDAExecutionProvider' not in ort_providers:
+            raise RuntimeError(f'CUDAExecutionProvider not available in onnxruntime: {ort_providers}')
+
         self.app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.app.prepare(ctx_id=0, det_size=(320, 320))  # 320 is fast enough for webcam faces
 
@@ -49,7 +59,19 @@ class SwapEngine:
             model_path,
             providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
         )
-        log.info('inswapper providers: %s', self.swapper.session.get_providers())
+        swapper_providers = self.swapper.session.get_providers()
+        log.info('inswapper providers: %s', swapper_providers)
+        if 'CUDAExecutionProvider' not in swapper_providers:
+            raise RuntimeError(f'inswapper is not using CUDAExecutionProvider: {swapper_providers}')
+
+        app_model_providers = {}
+        for name, model in getattr(self.app, 'models', {}).items():
+            session = getattr(model, 'session', None)
+            if session is not None and hasattr(session, 'get_providers'):
+                providers = session.get_providers()
+                app_model_providers[name] = providers
+        if app_model_providers:
+            log.info('face analysis model providers: %s', app_model_providers)
 
         self._source_face = None  # cached after set_identity()
         self._source_img  = None
@@ -63,6 +85,7 @@ class SwapEngine:
         self._smoothed_lmk106 = None
         self._source_skin_stats = None
         self._source_skin_zone_stats = None
+        self._profile_counter = 0
 
     def set_detect_every_n(self, n: int):
         self.DETECT_EVERY_N = max(1, int(n))
@@ -98,6 +121,94 @@ class SwapEngine:
             self._smoothed_lmk106 = face.landmark_2d_106.copy()
 
         return face
+
+    def _copy_face_with_offset(self, face, dx=0.0, dy=0.0):
+        cloned = copy.deepcopy(face)
+        delta = np.array([dx, dy, dx, dy], dtype=np.float32)
+        cloned.bbox = np.asarray(cloned.bbox, dtype=np.float32) + delta
+
+        kps = getattr(cloned, 'kps', None)
+        if kps is not None:
+            cloned.kps = np.asarray(kps, dtype=np.float32) + np.array([dx, dy], dtype=np.float32)
+
+        lmk = getattr(cloned, 'landmark_2d_106', None)
+        if lmk is not None:
+            cloned.landmark_2d_106 = np.asarray(lmk, dtype=np.float32) + np.array([dx, dy], dtype=np.float32)
+
+        return cloned
+
+    def _compute_roi(self, frame_shape, bbox, expand=None):
+        h, w = frame_shape[:2]
+        x1, y1, x2, y2 = np.asarray(bbox, dtype=np.float32)
+        bw = max(1.0, x2 - x1)
+        bh = max(1.0, y2 - y1)
+        cx = (x1 + x2) * 0.5
+        cy = (y1 + y2) * 0.5
+        scale = float(expand or self.ROI_EXPAND)
+        half_w = max(self.MIN_ROI_SIZE * 0.5, bw * scale * 0.5)
+        half_h = max(self.MIN_ROI_SIZE * 0.5, bh * scale * 0.5)
+        rx1 = max(0, int(round(cx - half_w)))
+        ry1 = max(0, int(round(cy - half_h)))
+        rx2 = min(w, int(round(cx + half_w)))
+        ry2 = min(h, int(round(cy + half_h)))
+        return rx1, ry1, rx2, ry2
+
+    def _detect_primary_face(self, frame):
+        detect_t0 = time.perf_counter()
+        if self._cached_target_faces:
+            face = self._cached_target_faces[0]
+            rx1, ry1, rx2, ry2 = self._compute_roi(frame.shape, face.bbox)
+            roi = frame[ry1:ry2, rx1:rx2]
+            if roi.size > 0:
+                faces = self.app.get(roi)
+                detect_ms = (time.perf_counter() - detect_t0) * 1000
+                if faces:
+                    primary = sorted(faces, key=lambda f: f.bbox[2] - f.bbox[0], reverse=True)[0]
+                    return self._copy_face_with_offset(primary, rx1, ry1), detect_ms, 'roi'
+
+        faces = self.app.get(frame)
+        detect_ms = (time.perf_counter() - detect_t0) * 1000
+        if not faces:
+            return None, detect_ms, 'full'
+        primary = sorted(faces, key=lambda f: f.bbox[2] - f.bbox[0], reverse=True)[0]
+        return primary, detect_ms, 'full'
+
+    def _swap_face_roi(self, base_frame, face):
+        h, w = base_frame.shape[:2]
+        rx1, ry1, rx2, ry2 = self._compute_roi(base_frame.shape, face.bbox, expand=1.65)
+        roi = base_frame[ry1:ry2, rx1:rx2]
+        if roi.size == 0:
+            return base_frame, {'roi_ms': 0.0, 'swap_ms': 0.0, 'blend_ms': 0.0}
+
+        local_face = self._copy_face_with_offset(face, -rx1, -ry1)
+        roi_h, roi_w = roi.shape[:2]
+
+        swap_t0 = time.perf_counter()
+        swapped_roi = self.swapper.get(roi, local_face, self._source_face, paste_back=True)
+        swap_ms = (time.perf_counter() - swap_t0) * 1000
+
+        blend_t0 = time.perf_counter()
+        complexion_mask = self._build_complexion_mask(local_face, roi_h, roi_w)
+        swapped_roi = self._match_face_tone(swapped_roi, local_face, complexion_mask)
+
+        blend_mask = self._build_face_mask(local_face, roi_h, roi_w)
+        mask_f = cv2.GaussianBlur(
+            blend_mask.astype(np.float32) / 255.0, (51, 51), 14.0
+        )[:, :, np.newaxis]
+
+        out_roi = (
+            swapped_roi.astype(np.float32) * mask_f +
+            roi.astype(np.float32) * (1.0 - mask_f)
+        ).astype(np.uint8)
+
+        result = base_frame.copy()
+        result[ry1:ry2, rx1:rx2] = out_roi
+        blend_ms = (time.perf_counter() - blend_t0) * 1000
+        return result, {
+            'roi_ms': 0.0,
+            'swap_ms': swap_ms,
+            'blend_ms': blend_ms,
+        }
 
     def _build_face_mask(self, face, h, w):
         mask = np.zeros((h, w), dtype=np.uint8)
@@ -375,6 +486,8 @@ class SwapEngine:
             return frame
 
         self._frame_idx += 1
+        detect_ms = 0.0
+        detect_mode = 'skip'
 
         # Realtime mode can skip every other detection to save GPU time.
         # If no cached face exists yet, always detect immediately.
@@ -384,9 +497,8 @@ class SwapEngine:
             (self._frame_idx % self.DETECT_EVERY_N) == 1
         )
         if should_detect:
-            faces = self.app.get(frame)
-            if faces:
-                primary = sorted(faces, key=lambda f: f.bbox[2] - f.bbox[0], reverse=True)[0]
+            primary, detect_ms, detect_mode = self._detect_primary_face(frame)
+            if primary is not None:
                 self._cached_target_faces = [self._build_tracked_face(primary)]
                 self._miss_count = 0
             else:
@@ -400,31 +512,25 @@ class SwapEngine:
         if not self._cached_target_faces:
             return frame
 
-        h, w = frame.shape[:2]
-        result = frame.copy()
+        result = frame
+        swap_total_ms = 0.0
+        blend_total_ms = 0.0
         for face in self._cached_target_faces:
-            # inswapper paste
-            swapped = self.swapper.get(result, face, self._source_face, paste_back=True)
+            result, timings = self._swap_face_roi(result, face)
+            swap_total_ms += timings['swap_ms']
+            blend_total_ms += timings['blend_ms']
 
-            # paste_back uses a hard internal mask that leaves a visible edge seam.
-            # Use a broad complexion mask for tone transfer, but keep a tighter
-            # face-shaped mask for the final composite so the perimeter blends
-            # naturally around hairline, temples, ears, and jaw.
-            complexion_mask = self._build_complexion_mask(face, h, w)
-            swapped = self._match_face_tone(swapped, face, complexion_mask)
-
-            blend_mask = self._build_face_mask(face, h, w)
-
-            # Wide Gaussian feather — face center is fully swapped,
-            # edges fade softly into the original background
-            mask_f = cv2.GaussianBlur(
-                blend_mask.astype(np.float32) / 255.0, (51, 51), 14.0
-            )[:, :, np.newaxis]
-
-            result = (
-                swapped.astype(np.float32) * mask_f +
-                result.astype(np.float32) * (1.0 - mask_f)
-            ).astype(np.uint8)
+        self._profile_counter += 1
+        if self._profile_counter % 60 == 0:
+            log.info(
+                'swap profile detect=%.0fms(%s) swap=%.0fms blend=%.0fms detect_every=%d cached_faces=%d',
+                detect_ms,
+                detect_mode,
+                swap_total_ms,
+                blend_total_ms,
+                self.DETECT_EVERY_N,
+                len(self._cached_target_faces),
+            )
 
         return result
 

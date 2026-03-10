@@ -44,9 +44,11 @@ pipeline = FaceSwapPipeline(PipelineConfig())
 # FPS tracking (module-level so it persists across frames)
 _fps_frame_count = 0
 _fps_window_start = 0.0
+_jpeg_params_cache = {}
 
 
 def decode_latest_frame(frame_bytes: bytes):
+    decode_t0 = time.perf_counter()
     arr = np.frombuffer(frame_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
@@ -70,6 +72,7 @@ def decode_latest_frame(frame_bytes: bytes):
         'proc_w': proc_w,
         'proc_h': proc_h,
         'jpeg_quality': jpeg_quality,
+        'decode_ms': (time.perf_counter() - decode_t0) * 1000,
         'decoded_at': time.perf_counter(),
     }
 
@@ -90,6 +93,7 @@ def encode_processed_frame(frame_packet):
     if frame_packet is None:
         return None
 
+    encode_t0 = time.perf_counter()
     out = (
         frame_packet['swapped_small']
         if (frame_packet['orig_w'] == frame_packet['proc_w'] and frame_packet['orig_h'] == frame_packet['proc_h'])
@@ -99,13 +103,21 @@ def encode_processed_frame(frame_packet):
             interpolation=cv2.INTER_LINEAR,
         )
     )
-    ok, buf = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, frame_packet['jpeg_quality']])
+    jpeg_quality = int(frame_packet['jpeg_quality'])
+    jpeg_params = _jpeg_params_cache.get(jpeg_quality)
+    if jpeg_params is None:
+        jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
+        _jpeg_params_cache[jpeg_quality] = jpeg_params
+    ok, buf = cv2.imencode('.jpg', out, jpeg_params)
     if not ok:
         return None
 
     return {
         'buf': buf.tobytes(),
         'frame_ms': frame_packet['frame_ms'],
+        'decode_ms': frame_packet.get('decode_ms', 0.0),
+        'encode_ms': (time.perf_counter() - encode_t0) * 1000,
+        'pipeline_ms': (time.perf_counter() - frame_packet['decoded_at']) * 1000,
         'produced_at': time.perf_counter(),
     }
 
@@ -221,10 +233,13 @@ async def handle_ws(request):
                 recv_fps = _recv_count / max(now - _recv_t0[0], 1e-6) if _recv_t0[0] else 0
                 queue_ms = (now - packet['produced_at']) * 1000
                 log.info(
-                    'out FPS=%.1f  in FPS=%.1f  last_frame=%.0fms  send_wait=%.0fms',
+                    'out FPS=%.1f  in FPS=%.1f  decode=%.0fms  process=%.0fms  encode=%.0fms  pipeline=%.0fms  send_wait=%.0fms',
                     fps,
                     recv_fps,
+                    packet.get('decode_ms', 0.0),
                     packet['frame_ms'],
+                    packet.get('encode_ms', 0.0),
+                    packet.get('pipeline_ms', packet['frame_ms']),
                     queue_ms,
                 )
                 _fps_window_start = now
