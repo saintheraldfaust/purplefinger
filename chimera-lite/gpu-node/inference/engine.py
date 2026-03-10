@@ -35,6 +35,7 @@ class SwapEngine:
 
     DETECT_EVERY_N = 1   # per-profile; realtime can relax this for more FPS
     ROI_EXPAND = 1.85
+    DETECT_ROI_EXPAND = 2.8  # wider ROI used only for detection; reduces full-frame fallback
     MIN_ROI_SIZE = 192
 
     def __init__(self, model_path: str = 'models/inswapper_128.onnx'):
@@ -77,7 +78,7 @@ class SwapEngine:
             allowed_modules=['detection', 'landmark_2d_106'],
             providers=_gpu_providers,
         )
-        self.target_app.prepare(ctx_id=0, det_size=(320, 320))  # 320 is fast enough for webcam faces
+        self.target_app.prepare(ctx_id=0, det_size=(256, 256))  # 256 is faster than 320, sufficient for webcam faces
 
         log.info('Loading inswapper_128 from %s...', model_path)
         self.swapper = insightface.model_zoo.get_model(
@@ -237,7 +238,10 @@ class SwapEngine:
         detect_t0 = time.perf_counter()
         if self._cached_target_faces:
             face = self._cached_target_faces[0]
-            rx1, ry1, rx2, ry2 = self._compute_roi(frame.shape, face.bbox)
+            # Use a wider ROI for detection than for swap to reduce miss rate.
+            # Critically: if ROI misses, treat as a tracking miss rather than
+            # falling through to a second full-frame detection call (was ~2x cost).
+            rx1, ry1, rx2, ry2 = self._compute_roi(frame.shape, face.bbox, expand=self.DETECT_ROI_EXPAND)
             roi = frame[ry1:ry2, rx1:rx2]
             if roi.size > 0:
                 faces = self.target_app.get(roi)
@@ -245,7 +249,11 @@ class SwapEngine:
                 if faces:
                     primary = sorted(faces, key=lambda f: f.bbox[2] - f.bbox[0], reverse=True)[0]
                     return self._copy_face_with_offset(primary, rx1, ry1), detect_ms, 'roi'
+            # ROI miss — single call, count as miss; stale_face_ttl keeps the swap alive.
+            detect_ms = (time.perf_counter() - detect_t0) * 1000
+            return None, detect_ms, 'roi-miss'
 
+        # No cached face yet — run full-frame detection once.
         faces = self.target_app.get(frame)
         detect_ms = (time.perf_counter() - detect_t0) * 1000
         if not faces:
