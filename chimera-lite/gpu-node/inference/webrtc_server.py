@@ -46,6 +46,70 @@ _fps_frame_count = 0
 _fps_window_start = 0.0
 
 
+def decode_latest_frame(frame_bytes: bytes):
+    arr = np.frombuffer(frame_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+
+    runtime = pipeline.get_runtime_settings()
+    proc_w = runtime['proc_w']
+    proc_h = runtime['proc_h']
+    jpeg_quality = runtime['jpeg_quality']
+
+    h, w = img.shape[:2]
+    if w != proc_w or h != proc_h:
+        small = cv2.resize(img, (proc_w, proc_h), interpolation=cv2.INTER_LINEAR)
+    else:
+        small = img
+
+    return {
+        'small': small,
+        'orig_w': w,
+        'orig_h': h,
+        'proc_w': proc_w,
+        'proc_h': proc_h,
+        'jpeg_quality': jpeg_quality,
+        'decoded_at': time.perf_counter(),
+    }
+
+
+def process_decoded_frame(frame_packet):
+    if frame_packet is None:
+        return None
+
+    t0 = time.perf_counter()
+    swapped_small = pipeline.process_frame(frame_packet['small'])
+    frame_packet['swapped_small'] = swapped_small
+    frame_packet['frame_ms'] = (time.perf_counter() - t0) * 1000
+    frame_packet['processed_at'] = time.perf_counter()
+    return frame_packet
+
+
+def encode_processed_frame(frame_packet):
+    if frame_packet is None:
+        return None
+
+    out = (
+        frame_packet['swapped_small']
+        if (frame_packet['orig_w'] == frame_packet['proc_w'] and frame_packet['orig_h'] == frame_packet['proc_h'])
+        else cv2.resize(
+            frame_packet['swapped_small'],
+            (frame_packet['orig_w'], frame_packet['orig_h']),
+            interpolation=cv2.INTER_LINEAR,
+        )
+    )
+    ok, buf = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, frame_packet['jpeg_quality']])
+    if not ok:
+        return None
+
+    return {
+        'buf': buf.tobytes(),
+        'frame_ms': frame_packet['frame_ms'],
+        'produced_at': time.perf_counter(),
+    }
+
+
 # --- WebSocket stream handler ---
 async def handle_ws(request):
     global _fps_frame_count, _fps_window_start
@@ -55,49 +119,81 @@ async def handle_ws(request):
     log.info('WS connected from %s', request.remote)
 
     latest_in = [None]
+    latest_decoded = [None]
+    latest_processed = [None]
     latest_out = [None]
-    frame_event = asyncio.Event()  # signals process_loop immediately when frame arrives
-    send_event = asyncio.Event()   # signals send_loop immediately when a processed frame is ready
+    recv_event = asyncio.Event()      # signals decode_loop immediately when frame bytes arrive
+    decoded_event = asyncio.Event()   # signals process_loop immediately when a decoded frame is ready
+    processed_event = asyncio.Event() # signals encode_loop immediately when a processed frame is ready
+    send_event = asyncio.Event()      # signals send_loop immediately when a processed frame is ready
 
     _recv_count = 0
     _recv_t0 = [0.0]
 
-    async def process_loop():
+    async def decode_loop():
         while not ws.closed:
-            await frame_event.wait()
-            frame_event.clear()
-            img = latest_in[0]
-            if img is None:
+            await recv_event.wait()
+            recv_event.clear()
+
+            frame_bytes = latest_in[0]
+            if frame_bytes is None:
                 continue
             latest_in[0] = None
 
-            runtime = pipeline.get_runtime_settings()
-            proc_w = runtime['proc_w']
-            proc_h = runtime['proc_h']
-            jpeg_quality = runtime['jpeg_quality']
-
-            h, w = img.shape[:2]
-            if w != proc_w or h != proc_h:
-                small = cv2.resize(img, (proc_w, proc_h), interpolation=cv2.INTER_LINEAR)
-            else:
-                small = img
-
             try:
-                t0 = time.perf_counter()
-                swapped_small = await asyncio.to_thread(pipeline.process_frame, small)
-                frame_ms = (time.perf_counter() - t0) * 1000
-                out = swapped_small if (w == proc_w and h == proc_h) else \
-                    cv2.resize(swapped_small, (w, h), interpolation=cv2.INTER_LINEAR)
-                _, buf = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+                packet = await asyncio.to_thread(decode_latest_frame, frame_bytes)
             except Exception as e:
-                log.warning('Frame error: %s', e)
+                log.warning('Decode error: %s', e)
                 continue
 
-            latest_out[0] = {
-                'buf': buf.tobytes(),
-                'frame_ms': frame_ms,
-                'produced_at': time.perf_counter(),
-            }
+            if packet is None:
+                continue
+
+            latest_decoded[0] = packet
+            decoded_event.set()
+
+    async def process_loop():
+        while not ws.closed:
+            await decoded_event.wait()
+            decoded_event.clear()
+
+            frame_packet = latest_decoded[0]
+            if frame_packet is None:
+                continue
+            latest_decoded[0] = None
+
+            try:
+                packet = await asyncio.to_thread(process_decoded_frame, frame_packet)
+            except Exception as e:
+                log.warning('Process error: %s', e)
+                continue
+
+            if packet is None:
+                continue
+
+            latest_processed[0] = packet
+            processed_event.set()
+
+    async def encode_loop():
+        while not ws.closed:
+            await processed_event.wait()
+            processed_event.clear()
+
+            frame_packet = latest_processed[0]
+            if frame_packet is None:
+                continue
+            latest_processed[0] = None
+
+            try:
+                packet = await asyncio.to_thread(encode_processed_frame, frame_packet)
+            except Exception as e:
+                log.warning('Encode error: %s', e)
+                continue
+
+            if packet is None:
+                continue
+
+            latest_out[0] = packet
             send_event.set()
 
     async def send_loop():
@@ -133,27 +229,36 @@ async def handle_ws(request):
                 )
                 _fps_window_start = now
 
+    decode_task = asyncio.create_task(decode_loop())
     proc_task = asyncio.create_task(process_loop())
+    encode_task = asyncio.create_task(encode_loop())
     send_task = asyncio.create_task(send_loop())
     try:
         async for msg in ws:
             if msg.type == WSMsgType.BINARY:
-                arr = np.frombuffer(msg.data, dtype=np.uint8)
-                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if img is not None:
-                    latest_in[0] = img
-                    _recv_count += 1
-                    if _recv_t0[0] == 0.0:
-                        _recv_t0[0] = time.perf_counter()
-                    frame_event.set()  # wake process_loop immediately
+                latest_in[0] = bytes(msg.data)
+                _recv_count += 1
+                if _recv_t0[0] == 0.0:
+                    _recv_t0[0] = time.perf_counter()
+                recv_event.set()  # wake decode_loop immediately
             elif msg.type == WSMsgType.ERROR:
                 log.error('WS error: %s', ws.exception())
                 break
     finally:
+        decode_task.cancel()
         proc_task.cancel()
+        encode_task.cancel()
         send_task.cancel()
         try:
+            await decode_task
+        except asyncio.CancelledError:
+            pass
+        try:
             await proc_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await encode_task
         except asyncio.CancelledError:
             pass
         try:

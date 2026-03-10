@@ -320,7 +320,7 @@ function ensureServerReadyBackground(session) {
     .catch(err => console.error('Inference server never became ready:', err.message));
 }
 
-async function pollForEndpoint(podId, maxWaitMs = 20 * 60 * 1000, intervalMs = 5000) {
+async function pollForEndpoint(podId, maxWaitMs = 30 * 60 * 1000, intervalMs = 5000) {
   const deadline = Date.now() + maxWaitMs;
   while (Date.now() < deadline) {
     await sleep(intervalMs);
@@ -331,7 +331,7 @@ async function pollForEndpoint(podId, maxWaitMs = 20 * 60 * 1000, intervalMs = 5
   throw new Error('Pod did not become ready in time');
 }
 
-async function waitForInferenceServer(endpoint, maxWaitMs = 15 * 60 * 1000, intervalMs = 10000) {
+async function waitForInferenceServer(endpoint, maxWaitMs = 25 * 60 * 1000, intervalMs = 10000) {
   const deadline = Date.now() + maxWaitMs;
   const url = `http://${endpoint.ip}:${endpoint.port}/health`;
   console.log(`Waiting for inference server at ${url}...`);

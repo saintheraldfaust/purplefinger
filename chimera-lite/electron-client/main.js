@@ -236,7 +236,7 @@ ipcMain.handle('get-status', async () => {
 
 ipcMain.handle('start-session', async () => {
   ensureBackendConfig();
-  const res = await axios.post(`${appConfig.backendUrl}/start`, {}, { headers: getHeaders(), timeout: 10 * 60 * 1000 });
+  const res = await axios.post(`${appConfig.backendUrl}/start`, {}, { headers: getHeaders(), timeout: 30 * 60 * 1000 });
   return res.data;
 });
 

@@ -147,7 +147,7 @@ let lastRecvFrames = 0;
 let lastSentAt = 0;
 let statsTimer = null;
 let currentProfile = 'realtime';
-let currentSendFps = 10;
+let currentSendFps = 12;
 let currentSendQuality = 0.68;
 let currentSendW = 512;
 let currentSendH = 288;
@@ -159,7 +159,7 @@ let lastLightProbeAt = 0;
 const STREAM_PROFILES = {
   realtime: {
     label: 'Realtime',
-    sendFps: 10,
+    sendFps: 12,
     minFps: 8,
     headroom: 1,
     quality: 0.68,
@@ -572,6 +572,13 @@ btnStart.addEventListener('click', async () => {
       await window.chimera.attachWarmPod(configuredWarmPodId);
     }
 
+    const existingStatus = await window.chimera.getStatus();
+    if (existingStatus?.active) {
+      setLog('Reusable warm pod found. Connecting to it...');
+    } else {
+      setLog('No reusable warm pod found. Provisioning a new GPU pod...');
+    }
+
     // /start now reuses a live warm pod when one already exists.
     const data = await window.chimera.startSession();
     setCurrentPod(data.podId, data.endpoint);
@@ -583,7 +590,7 @@ btnStart.addEventListener('click', async () => {
     if (data.reused) {
       setLog('Warm pod found. Checking server readiness...');
     } else {
-      setLog('Provisioning a new GPU pod...');
+      setLog('Warm pod not available. Waiting for new GPU pod to finish booting...');
     }
 
     // Poll /ready until the inference server is accepting connections.
@@ -595,7 +602,7 @@ btnStart.addEventListener('click', async () => {
       const elapsed = Math.round((Date.now() - startedAt) / 1000);
       dots = (dots + 1) % 4;
       const d = '.'.repeat(dots + 1);
-      const prefix = data.reused ? 'Warm pod waking' : 'Server starting';
+      const prefix = data.reused ? 'Warm pod waking' : 'Provisioning and starting server';
       setLog(`${prefix}${d}  ${elapsed}s`);
       try {
         const r = await window.chimera.checkReady();
