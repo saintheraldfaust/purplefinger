@@ -160,9 +160,9 @@ const STREAM_PROFILES = {
   realtime: {
     label: 'Realtime',
     sendFps: 20,
-    minFps: 15,
-    headroom: 1,
-    quality: 0.78,
+    minFps: 6,
+    headroom: 2,
+    quality: 0.65,
     width: 512,
     height: 288,
     summary: 'Realtime mode prioritizes steadier motion with lighter detection cadence, mild low-light compensation, and no enhancement overhead.',
@@ -272,32 +272,45 @@ function updateModeUI() {
   ovMode.textContent = STREAM_PROFILES[currentProfile].label;
 }
 
+// Self-pacing capture loop: fires next encode immediately after previous one
+// completes, then waits only if encode was faster than the target interval.
+// Eliminates the setInterval + _encodes backpressure drop problem where slow
+// encodes caused most timer ticks to be thrown away.
+let _captureLoopActive = false;
+
 function restartCaptureTimer() {
-  if (!captureTimer) return;
-  clearInterval(captureTimer);
-  captureTimer = setInterval(doCapture, 1000 / currentSendFps);
+  // No-op: loop reads currentSendFps dynamically, no restart needed.
 }
 
-function doCapture() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  if (_encodes > 1) return;
-  if (!captureVideo || captureVideo.readyState < 2) return;
+async function _captureLoop() {
+  while (_captureLoopActive) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !captureVideo || captureVideo.readyState < 2) {
+      await new Promise((r) => setTimeout(r, 33));
+      continue;
+    }
 
-  _encodes++;
-  lastSentAt = Date.now();
-  ensureOffscreenCanvas();
-  updateCaptureFilter();
-  offCtx.filter = currentCaptureFilter;
-  offCtx.drawImage(captureVideo, 0, 0, currentSendW, currentSendH);
-  offCtx.filter = 'none';
-  offscreen.convertToBlob({ type: 'image/jpeg', quality: currentSendQuality })
-    .then((blob) => {
-      _encodes--;
+    const t0 = performance.now();
+
+    ensureOffscreenCanvas();
+    updateCaptureFilter();
+    offCtx.filter = currentCaptureFilter;
+    offCtx.drawImage(captureVideo, 0, 0, currentSendW, currentSendH);
+    offCtx.filter = 'none';
+
+    try {
+      const blob = await offscreen.convertToBlob({ type: 'image/jpeg', quality: currentSendQuality });
       sentFrames++;
-      if (blob && ws && ws.readyState === WebSocket.OPEN)
-        ws.send(blob);
-    })
-    .catch(() => _encodes--);
+      lastSentAt = Date.now();
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(blob);
+    } catch (_) { /* ignore */ }
+
+    // Pace to at most currentSendFps; if encode took longer just continue immediately.
+    const elapsed = performance.now() - t0;
+    const minInterval = 1000 / currentSendFps;
+    if (elapsed < minInterval) {
+      await new Promise((r) => setTimeout(r, minInterval - elapsed));
+    }
+  }
 }
 
 async function setProfile(profile, pushToBackend = true) {
@@ -443,12 +456,11 @@ btnAttachPod.addEventListener('click', async () => {
 let ws           = null;
 let localStream  = null;
 let captureVideo = null;  // hidden <video> to draw from
-let captureTimer = null;
+let captureTimer = null;  // unused but kept to avoid reference errors in restartCaptureTimer
 let gpuIp        = null;
 let gpuPort      = null;
 let offscreen    = null;
 let offCtx       = null;
-let _encodes     = 0;
 
 async function startStreaming(ip, port) {
   gpuIp = ip;
@@ -488,11 +500,8 @@ async function startStreaming(ip, port) {
     videoEmpty.style.display = 'none';
     setLog(`Streaming — ${ip}:${port}`);
     startStats();
-    _encodes = 0;
-
-    // Fire at 20fps; server always processes the latest frame so extra sends just
-    // update the queue — no lockstep stall waiting for a reply.
-    captureTimer = setInterval(doCapture, 1000 / currentSendFps);
+    _captureLoopActive = true;
+    _captureLoop();
   };
 
   ws.onmessage = (event) => {
@@ -514,10 +523,8 @@ async function startStreaming(ip, port) {
 
 function stopStreaming() {
   gpuIp = null;
-  clearInterval(captureTimer);
-  captureTimer = null;
+  _captureLoopActive = false;
   stopStats();
-  _encodes = 0;
 
   if (ws) { ws.close(); ws = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
