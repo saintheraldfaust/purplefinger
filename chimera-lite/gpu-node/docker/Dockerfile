@@ -14,7 +14,7 @@ WORKDIR /opt/chimera
 
 COPY docker/requirements.txt .
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    python3 -m pip install --no-cache-dir -r requirements.txt && \
+    python3 -m pip install --no-cache-dir --ignore-installed cryptography -r requirements.txt && \
     python3 - <<'PYEOF'
 import site, os
 for d in site.getsitepackages():
