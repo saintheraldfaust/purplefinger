@@ -508,16 +508,32 @@ async function startStreaming(ip, port) {
     _captureLoop();
   };
 
-  ws.onmessage = (event) => {
-    recvFrames++;
-    // Display in the Electron window — event.data is already ArrayBuffer
-    createImageBitmap(new Blob([event.data], { type: 'image/jpeg' })).then((bitmap) => {
+  // Single-slot display: only the latest received frame gets rendered.
+  // If a newer frame arrives while createImageBitmap is decoding, the pending
+  // decode is abandoned and the newer frame is decoded instead. This prevents
+  // the canvas from replaying a backlog of stale frames after a network hiccup.
+  let _latestFrame = null;
+  let _displayPending = false;
+
+  function _scheduleDisplay(data) {
+    _latestFrame = data;
+    if (_displayPending) return;  // a decode is already in-flight; it will pick up _latestFrame
+    _displayPending = true;
+    createImageBitmap(new Blob([_latestFrame], { type: 'image/jpeg' })).then((bitmap) => {
       displayCtx.drawImage(bitmap, 0, 0, remoteCanvas.width, remoteCanvas.height);
       bitmap.close();
-    });
+      _displayPending = false;
+      if (_latestFrame !== data) {
+        // A newer frame arrived while we were decoding — display it now.
+        _scheduleDisplay(_latestFrame);
+      }
+    }).catch(() => { _displayPending = false; });
+  }
 
+  ws.onmessage = (event) => {
+    recvFrames++;
+    _scheduleDisplay(event.data);
     // Push to OBS Browser Source — send raw ArrayBuffer, main process base64-encodes it.
-    // Eliminates the async FileReader + dataURL string overhead on the render process.
     window.chimera.obsFrame(event.data);
   };
 

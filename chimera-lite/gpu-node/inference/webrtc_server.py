@@ -135,6 +135,11 @@ async def handle_ws(request):
             if buf is None:
                 continue
 
+            # If a newer frame arrived while we were processing, skip sending
+            # this stale result — the client will receive the fresher frame next.
+            if latest[0] is not None:
+                continue
+
             try:
                 await ws.send_bytes(buf)
             except Exception:
