@@ -290,18 +290,28 @@ class SwapEngine:
 
         blend_t0 = time.perf_counter()
 
-        # Compute valid mask BEFORE tone matching: pixels the inswapper warp
-        # did not cover are zero. Tone matching would corrupt their value.
-        valid_mask_raw = (swapped_roi.sum(axis=2, keepdims=True) > 0).astype(np.float32)
+        # Valid mask: the inswapper warp fills a 128×128 square that maps to
+        # a roughly quadrilateral region.  warpAffine with borderValue=0
+        # means bilinear interpolation darkens edge pixels (real blended with
+        # black).  A naive "> 0" threshold includes those semi-dark pixels,
+        # producing a visible dark rectangular halo ("drop shadow").
+        #
+        # Fix: higher brightness threshold to reject the dark fringe, then
+        # erode to pull the boundary inward past any remaining dark ring,
+        # then a wide Gaussian blur for a soft invisible transition.
+        valid_bright = (swapped_roi.astype(np.float32).sum(axis=2) > 60).astype(np.uint8)
+        erode_k = max(3, int(round(min(roi_h, roi_w) * 0.02)))
+        if erode_k % 2 == 0:
+            erode_k += 1
+        valid_eroded = cv2.erode(valid_bright, np.ones((erode_k, erode_k), np.uint8), iterations=1)
+        valid_mask_s = cv2.GaussianBlur(valid_eroded.astype(np.float32), (41, 41), 10.0)[:, :, np.newaxis]
 
+        # Tone-match AFTER building valid mask but use the raw swapped pixels
+        # (the dark fringe is excluded by the eroded valid mask, not by zeroing).
         swapped_roi = self._match_face_tone(swapped_roi, local_face, blend_assets)
 
         face_mask = blend_assets['blend_alpha']
-        if valid_mask_raw.any():
-            valid_mask_s = cv2.GaussianBlur(valid_mask_raw[:, :, 0], (21, 21), 4.0)[:, :, np.newaxis]
-            mask_f = np.minimum(face_mask, valid_mask_s)
-        else:
-            mask_f = face_mask
+        mask_f = np.minimum(face_mask, valid_mask_s)
 
         # gap_mask: face region the face_mask covers but the inswapper warp doesn't.
         # This is typically the forehead — fill with tone-corrected original instead
