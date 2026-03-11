@@ -226,7 +226,7 @@ class SwapEngine:
         blend_alpha = cv2.GaussianBlur(
             blend_mask.astype(np.float32) / 255.0, (51, 51), 14.0
         )[:, :, np.newaxis]
-        tone_soft = (self._build_perimeter_falloff(target_mask, face.bbox) * 0.97)[:, :, np.newaxis]
+        tone_soft = (self._build_perimeter_falloff(target_mask, face.bbox) * 0.99)[:, :, np.newaxis]
 
         assets = {
             'complexion_mask': complexion_mask,
@@ -325,14 +325,47 @@ class SwapEngine:
         }
 
     def _build_face_mask(self, face, h, w):
+        """Build the full-face blend mask including forehead.
+
+        lmk[:33] only traces the jawline (ear-to-ear around chin), missing
+        the forehead entirely.  We extend upward with a forehead polygon
+        and a bridging ellipse so that blend_alpha covers the entire
+        visible face — critical for cross-race complexion transfer.
+        """
         mask = np.zeros((h, w), dtype=np.uint8)
+        x1, y1, x2, y2 = face.bbox.astype(int)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        bw = max(1, x2 - x1)
+        bh = max(1, y2 - y1)
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+
         lmk = getattr(face, 'landmark_2d_106', None)
         if lmk is not None:
             contour = lmk[:33].astype(np.int32)
             cv2.fillPoly(mask, [cv2.convexHull(contour)], 255)
+
+            # Forehead polygon: temple-to-temple up above bbox top
+            left_temple = contour[0]
+            right_temple = contour[32]
+            forehead_top = max(0, int(round(y1 - bh * 0.20)))
+            forehead_poly = np.array([
+                left_temple,
+                right_temple,
+                [int(round(right_temple[0] + bw * 0.04)), forehead_top],
+                [int(round(left_temple[0] - bw * 0.04)), forehead_top],
+            ], dtype=np.int32)
+            cv2.fillConvexPoly(mask, forehead_poly, 255)
+
+            # Bridging ellipse: smoothly connects jaw contour to forehead
+            cv2.ellipse(
+                mask,
+                (cx, int(round(cy - bh * 0.04))),
+                (max(1, int(round(bw * 0.50))), max(1, int(round(bh * 0.60)))),
+                0, 0, 360, 255, -1,
+            )
         else:
-            x1, y1, x2, y2 = face.bbox.astype(int)
-            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
             cv2.ellipse(mask, (cx, cy),
                         (max(1, (x2 - x1) // 2), max(1, (y2 - y1) // 2)),
                         0, 0, 360, 255, -1)
@@ -355,8 +388,8 @@ class SwapEngine:
         # not just the central face region.
         cv2.ellipse(
             mask,
-            (cx, int(round(cy - bh * 0.03))),
-            (max(1, int(round(bw * 0.54))), max(1, int(round(bh * 0.66)))),
+            (cx, int(round(cy - bh * 0.05))),
+            (max(1, int(round(bw * 0.58))), max(1, int(round(bh * 0.72)))),
             0, 0, 360, 255, -1,
         )
 
@@ -368,8 +401,8 @@ class SwapEngine:
             forehead_poly = np.array([
                 left_temple,
                 right_temple,
-                [int(round(right_temple[0] + bw * 0.05)), max(0, int(round(y1 - bh * 0.24)))],
-                [int(round(left_temple[0] - bw * 0.05)), max(0, int(round(y1 - bh * 0.24)))],
+                [int(round(right_temple[0] + bw * 0.06)), max(0, int(round(y1 - bh * 0.32)))],
+                [int(round(left_temple[0] - bw * 0.06)), max(0, int(round(y1 - bh * 0.32)))],
             ], dtype=np.int32)
             cv2.fillConvexPoly(mask, forehead_poly, 255)
 
@@ -516,11 +549,11 @@ class SwapEngine:
         falloff = falloff * shape_bias
 
         # Forehead needs stronger complexion retention than the side perimeter.
-        forehead_center_y = y1 + bh * 0.18
-        forehead = 1.0 - (((xx - cx) / max(1.0, bw * 0.34)) ** 2 + ((yy - forehead_center_y) / max(1.0, bh * 0.22)) ** 2)
+        forehead_center_y = y1 + bh * 0.14
+        forehead = 1.0 - (((xx - cx) / max(1.0, bw * 0.44)) ** 2 + ((yy - forehead_center_y) / max(1.0, bh * 0.30)) ** 2)
         forehead = np.clip(forehead, 0.0, 1.0)
-        forehead_boost = np.clip(0.55 + 0.55 * np.sqrt(forehead), 0.0, 1.0)
-        falloff = np.maximum(falloff, forehead_boost * binary.astype(np.float32) * 0.88)
+        forehead_boost = np.clip(0.60 + 0.48 * np.sqrt(forehead), 0.0, 1.0)
+        falloff = np.maximum(falloff, forehead_boost * binary.astype(np.float32) * 0.96)
 
         falloff = cv2.GaussianBlur(falloff.astype(np.float32), (31, 31), 6.0)
         return np.clip(falloff, 0.0, 1.0)
@@ -554,9 +587,15 @@ class SwapEngine:
         swapped_lab = cv2.cvtColor(swapped_roi, cv2.COLOR_BGR2LAB).astype(np.float32)
         dst_mean_maps, dst_std_maps = self._build_vertical_stat_maps(swapped_roi.shape[0], swapped_roi.shape[1])
 
+        # Exclude near-black pixels from stats — the inswapper warp leaves
+        # black (0,0,0) in uncovered regions (forehead periphery).  Including
+        # them would drag L* mean down and corrupt the colour transfer.
+        valid_skin = region & (swapped_lab[:, :, 0] > 8)
+        stats_region = valid_skin if int(valid_skin.sum()) >= 64 else region
+
         adjusted_lab = swapped_lab.copy()
         for ch in range(3):
-            src_vals = swapped_lab[:, :, ch][region]
+            src_vals = swapped_lab[:, :, ch][stats_region]
             src_mean = float(src_vals.mean())
             src_std = float(src_vals.std())
             if dst_mean_maps is not None and dst_std_maps is not None:
@@ -568,17 +607,19 @@ class SwapEngine:
 
             scale = dst_std / max(src_std, 1.0)
             if ch == 0:
-                # L channel: wider range for large lightness differences (e.g. dark→light skin)
-                scale = np.clip(scale, 0.75, 1.50)
+                # L channel: full range for cross-race swaps (e.g. dark↔light)
+                scale = np.clip(scale, 0.55, 2.00)
             else:
-                scale = np.clip(scale, 0.68, 1.65)
+                # a/b channels: hue and warmth shift
+                scale = np.clip(scale, 0.50, 2.00)
 
             channel = (swapped_lab[:, :, ch] - src_mean) * scale + dst_mean
             if ch == 0:
-                # Allow up to 52 L* units shift — covers full dark-to-light skin range
-                delta = np.clip(channel - swapped_lab[:, :, ch], -52.0, 52.0)
+                # L* shift up to ±70 — full dark↔light range
+                delta = np.clip(channel - swapped_lab[:, :, ch], -70.0, 70.0)
             else:
-                delta = np.clip(channel - swapped_lab[:, :, ch], -34.0, 34.0)
+                # a*/b* shift up to ±50 — covers undertone differences
+                delta = np.clip(channel - swapped_lab[:, :, ch], -50.0, 50.0)
             adjusted_lab[:, :, ch] = np.clip(swapped_lab[:, :, ch] + delta, 0.0, 255.0)
 
         adjusted_roi = cv2.cvtColor(adjusted_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
