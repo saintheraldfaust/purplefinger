@@ -286,28 +286,42 @@ class SwapEngine:
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=0.0,
         )
+
+        # --- Pixel-perfect valid mask ---
+        # The inswapper outputs a 128×128 square. warpAffine blends boundary
+        # pixels with black (borderValue=0), creating a dark bilinear fringe
+        # that looks like a rectangular drop-shadow.
+        #
+        # Instead of guessing with brightness thresholds, we create a clean
+        # white square in inswapper space, erode it to exclude the 1-2 pixel
+        # interpolation fringe, then warp it with the identical affine.
+        # Result: exact geometric match, zero false positives from dark skin.
+        swap_h, swap_w = swapped_face.shape[:2]
+        clean_mask = np.ones((swap_h, swap_w), dtype=np.uint8) * 255
+        clean_mask = cv2.erode(clean_mask, np.ones((5, 5), np.uint8), iterations=1)
+        valid_mask_raw = cv2.warpAffine(
+            clean_mask,
+            inverse_affine,
+            (roi_w, roi_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        ).astype(np.float32) / 255.0
+
+        # Replace dark fringe pixels in swapped_roi with original ROI pixels
+        # BEFORE tone matching and compositing. Even tiny mask leakage at the
+        # boundary would show dark interpolation artifacts otherwise.
+        fringe = (valid_mask_raw < 0.05)
+        for c in range(3):
+            ch = swapped_roi[:, :, c]
+            ch[fringe] = roi[:, :, c][fringe]
+
+        valid_mask_s = cv2.GaussianBlur(valid_mask_raw, (41, 41), 10.0)[:, :, np.newaxis]
+
         swap_ms = (time.perf_counter() - swap_t0) * 1000
 
         blend_t0 = time.perf_counter()
 
-        # Valid mask: the inswapper warp fills a 128×128 square that maps to
-        # a roughly quadrilateral region.  warpAffine with borderValue=0
-        # means bilinear interpolation darkens edge pixels (real blended with
-        # black).  A naive "> 0" threshold includes those semi-dark pixels,
-        # producing a visible dark rectangular halo ("drop shadow").
-        #
-        # Fix: higher brightness threshold to reject the dark fringe, then
-        # erode to pull the boundary inward past any remaining dark ring,
-        # then a wide Gaussian blur for a soft invisible transition.
-        valid_bright = (swapped_roi.astype(np.float32).sum(axis=2) > 60).astype(np.uint8)
-        erode_k = max(3, int(round(min(roi_h, roi_w) * 0.02)))
-        if erode_k % 2 == 0:
-            erode_k += 1
-        valid_eroded = cv2.erode(valid_bright, np.ones((erode_k, erode_k), np.uint8), iterations=1)
-        valid_mask_s = cv2.GaussianBlur(valid_eroded.astype(np.float32), (41, 41), 10.0)[:, :, np.newaxis]
-
-        # Tone-match AFTER building valid mask but use the raw swapped pixels
-        # (the dark fringe is excluded by the eroded valid mask, not by zeroing).
         swapped_roi = self._match_face_tone(swapped_roi, local_face, blend_assets)
 
         face_mask = blend_assets['blend_alpha']
