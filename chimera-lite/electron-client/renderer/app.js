@@ -22,6 +22,7 @@ const cfgBackendUrl   = document.getElementById('cfg-backend-url');
 const cfgApiToken     = document.getElementById('cfg-api-token');
 const cfgObsPort      = document.getElementById('cfg-obs-port');
 const cfgWarmPodId    = document.getElementById('cfg-warm-pod-id');
+const cfgRunpodGpuType = document.getElementById('cfg-runpod-gpu-type');
 const configNote      = document.getElementById('config-note');
 const obsUrlLabel     = document.getElementById('obs-url');
 
@@ -82,9 +83,10 @@ function applyConfigToUI(config) {
   if (cfgApiToken) cfgApiToken.value = config.apiToken || '';
   if (cfgObsPort) cfgObsPort.value = String(config.obsPort || 7891);
   if (cfgWarmPodId) cfgWarmPodId.value = config.warmPodId || '';
+  if (cfgRunpodGpuType) cfgRunpodGpuType.value = config.runpodGpuType || 'NVIDIA GeForce RTX 5090';
   if (obsUrlLabel) obsUrlLabel.textContent = config.obsUrl || `http://localhost:${config.obsPort || 7891}`;
   const pathHint = config.configPath ? `Saved locally at ${config.configPath}` : 'Saved locally on this machine.';
-  setConfigNote(`${pathHint}\nOptional warm pod ID lets the app reuse a specific live pod. Stop any active session before changing these values.`);
+  setConfigNote(`${pathHint}\nOptional warm pod ID lets the app reuse a specific live pod. GPU type controls what new RunPod machine type the backend requests. Stop any active session before changing these values.`);
 }
 
 function sleep(ms) {
@@ -410,6 +412,7 @@ btnSaveConfig.addEventListener('click', async () => {
       apiToken: cfgApiToken.value,
       obsPort: cfgObsPort.value,
       warmPodId: cfgWarmPodId.value,
+      runpodGpuType: cfgRunpodGpuType?.value,
     });
     applyConfigToUI(saved);
     setLog('Connection settings saved.');
@@ -440,6 +443,7 @@ btnAttachPod.addEventListener('click', async () => {
       apiToken: cfgApiToken.value,
       obsPort: cfgObsPort.value,
       warmPodId: podId,
+      runpodGpuType: cfgRunpodGpuType?.value,
     });
     applyConfigToUI(saved);
     setCurrentPod(result.podId, result.endpoint);
@@ -583,7 +587,7 @@ btnStart.addEventListener('click', async () => {
     }
 
     // /start now reuses a live warm pod when one already exists.
-    const data = await window.chimera.startSession();
+    const data = await window.chimera.startSession(cfgRunpodGpuType?.value);
     setCurrentPod(data.podId, data.endpoint);
 
     btnStart.style.display = 'none';
@@ -593,7 +597,7 @@ btnStart.addEventListener('click', async () => {
     if (data.reused) {
       setLog('Warm pod found. Checking server readiness...');
     } else {
-      setLog('Warm pod not available. Waiting for new GPU pod to finish booting...');
+      setLog(`Warm pod not available. Waiting for a new ${cfgRunpodGpuType?.value === 'NVIDIA GeForce RTX 4090' ? 'RTX 4090' : 'RTX 5090'} pod to finish booting...`);
     }
 
     // Poll /ready until the inference server is accepting connections.

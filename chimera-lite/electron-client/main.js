@@ -40,11 +40,36 @@ function normalizePodId(value) {
   return String(value || '').trim();
 }
 
+function normalizeGpuType(value) {
+  const normalized = String(value || '').trim();
+  if (normalized === 'NVIDIA GeForce RTX 5090' || normalized === 'NVIDIA GeForce RTX 4090') {
+    return normalized;
+  }
+  return 'NVIDIA GeForce RTX 5090';
+}
+
+function formatBackendError(err, fallback = 'Request failed') {
+  const responseError = err?.response?.data?.error;
+  const status = err?.response?.status;
+  const message = String(responseError || err?.message || fallback).trim();
+
+  if (/no longer any instances available/i.test(message)) {
+    return `RunPod has no capacity for ${appConfig.runpodGpuType} right now. Try the other GPU type or retry later.`;
+  }
+
+  if (status && responseError) {
+    return `${responseError}`;
+  }
+
+  return message || fallback;
+}
+
 let appConfig = {
   backendUrl: normalizeBaseUrl(process.env.BACKEND_URL || 'https://purplefinger-chimera.onrender.com'),
   apiToken: String(process.env.API_TOKEN || '').trim(),
   obsPort: normalizePort(process.env.OBS_PORT, 7891),
   warmPodId: normalizePodId(process.env.WARM_POD_ID || ''),
+  runpodGpuType: normalizeGpuType(process.env.RUNPOD_GPU_TYPE || 'NVIDIA GeForce RTX 5090'),
 };
 
 function getHeaders() {
@@ -65,6 +90,7 @@ function validateConfig(nextConfig) {
   const apiToken = String(nextConfig.apiToken || '').trim();
   const obsPort = normalizePort(nextConfig.obsPort, 7891);
   const warmPodId = normalizePodId(nextConfig.warmPodId || '');
+  const runpodGpuType = normalizeGpuType(nextConfig.runpodGpuType || appConfig.runpodGpuType);
 
   if (!backendUrl || !/^https?:\/\//i.test(backendUrl)) {
     throw new Error('Backend URL must start with http:// or https://');
@@ -73,7 +99,7 @@ function validateConfig(nextConfig) {
     throw new Error('API token is required');
   }
 
-  return { backendUrl, apiToken, obsPort, warmPodId };
+  return { backendUrl, apiToken, obsPort, warmPodId, runpodGpuType };
 }
 
 function writeConfigFile(nextConfig) {
@@ -84,6 +110,7 @@ function writeConfigFile(nextConfig) {
     `API_TOKEN=${nextConfig.apiToken}`,
     `OBS_PORT=${nextConfig.obsPort}`,
     `WARM_POD_ID=${nextConfig.warmPodId || ''}`,
+    `RUNPOD_GPU_TYPE=${nextConfig.runpodGpuType}`,
     '',
   ].join('\n');
   fs.writeFileSync(envPath, content, 'utf8');
@@ -230,26 +257,47 @@ app.on('window-all-closed', () => {
 
 ipcMain.handle('get-status', async () => {
   ensureBackendConfig();
-  const res = await axios.get(`${appConfig.backendUrl}/status`, { headers: getHeaders() });
-  return res.data;
+  try {
+    const res = await axios.get(`${appConfig.backendUrl}/status`, { headers: getHeaders() });
+    return res.data;
+  } catch (err) {
+    throw new Error(formatBackendError(err, 'Failed to get status'));
+  }
 });
 
-ipcMain.handle('start-session', async () => {
+ipcMain.handle('start-session', async (_event, requestedGpuType) => {
   ensureBackendConfig();
-  const res = await axios.post(`${appConfig.backendUrl}/start`, {}, { headers: getHeaders(), timeout: 30 * 60 * 1000 });
-  return res.data;
+  const gpuType = normalizeGpuType(requestedGpuType || appConfig.runpodGpuType);
+  try {
+    const res = await axios.post(
+      `${appConfig.backendUrl}/start`,
+      { gpuType },
+      { headers: getHeaders(), timeout: 30 * 60 * 1000 },
+    );
+    return res.data;
+  } catch (err) {
+    throw new Error(formatBackendError(err, 'Failed to start session'));
+  }
 });
 
 ipcMain.handle('check-ready', async () => {
   ensureBackendConfig();
-  const res = await axios.get(`${appConfig.backendUrl}/ready`, { headers: getHeaders(), timeout: 5000 });
-  return res.data;
+  try {
+    const res = await axios.get(`${appConfig.backendUrl}/ready`, { headers: getHeaders(), timeout: 5000 });
+    return res.data;
+  } catch (err) {
+    throw new Error(formatBackendError(err, 'Failed to check readiness'));
+  }
 });
 
 ipcMain.handle('stop-session', async () => {
   ensureBackendConfig();
-  const res = await axios.post(`${appConfig.backendUrl}/stop`, {}, { headers: getHeaders() });
-  return res.data;
+  try {
+    const res = await axios.post(`${appConfig.backendUrl}/stop`, {}, { headers: getHeaders(), timeout: 120000 });
+    return res.data;
+  } catch (err) {
+    throw new Error(formatBackendError(err, 'Failed to stop session'));
+  }
 });
 
 ipcMain.handle('get-stream-profile', async () => {
@@ -280,6 +328,7 @@ ipcMain.handle('get-app-config', async () => ({
   apiToken: appConfig.apiToken,
   obsPort: appConfig.obsPort,
   warmPodId: appConfig.warmPodId,
+  runpodGpuType: appConfig.runpodGpuType,
   configPath: resolveWritableEnvPath(),
   obsUrl: `http://localhost:${appConfig.obsPort}`,
 }));
@@ -304,6 +353,7 @@ ipcMain.handle('save-app-config', async (_event, nextConfig) => {
     apiToken: appConfig.apiToken,
     obsPort: appConfig.obsPort,
     warmPodId: appConfig.warmPodId,
+    runpodGpuType: appConfig.runpodGpuType,
     configPath: resolveWritableEnvPath(),
     obsUrl: `http://localhost:${appConfig.obsPort}`,
   };
@@ -316,11 +366,16 @@ ipcMain.handle('attach-warm-pod', async (_event, podId) => {
     throw new Error('Pod ID is required');
   }
 
-  const res = await axios.post(
-    `${appConfig.backendUrl}/attach-pod`,
-    { podId: normalizedPodId },
-    { headers: { ...getHeaders(), 'Content-Type': 'application/json' }, timeout: 30000 },
-  );
+  let res;
+  try {
+    res = await axios.post(
+      `${appConfig.backendUrl}/attach-pod`,
+      { podId: normalizedPodId },
+      { headers: { ...getHeaders(), 'Content-Type': 'application/json' }, timeout: 30000 },
+    );
+  } catch (err) {
+    throw new Error(formatBackendError(err, 'Failed to attach warm pod'));
+  }
 
   appConfig.warmPodId = normalizedPodId;
   writeConfigFile(appConfig);

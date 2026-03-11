@@ -19,6 +19,30 @@ const sessionStatePath = path.resolve(process.cwd(), config.SESSION_STATE_FILE);
 let activeSession = null; // { podId, endpoint: { ip, port }, timeoutHandle }
 let uploadedFaceBuffer = null;
 let streamProfile = 'realtime';
+let stopInFlight = null;
+
+function normalizeGpuType(value) {
+  const normalized = String(value || '').trim();
+  if (config.RUNPOD_ALLOWED_GPU_TYPES.includes(normalized)) {
+    return normalized;
+  }
+  return config.RUNPOD_GPU_TYPE;
+}
+
+function formatStartError(err, gpuType) {
+  const message = String(err?.message || 'Failed to start pod').trim();
+  if (/no longer any instances available/i.test(message)) {
+    return `RunPod has no capacity for ${gpuType} right now. Try the other GPU type or wait and retry.`;
+  }
+  return message;
+}
+
+async function waitForStopInFlight() {
+  if (!stopInFlight) return;
+  try {
+    await stopInFlight;
+  } catch (_) {}
+}
 
 // --- Auth Middleware ---
 function requireToken(req, res, next) {
@@ -46,12 +70,15 @@ app.get('/status', requireToken, async (req, res) => {
 // POST /start — provision GPU pod
 app.post('/start', requireToken, async (req, res) => {
   try {
+    await waitForStopInFlight();
+
     const existingSession = await getOrRecoverActiveSession();
     if (existingSession) {
       return res.json({ ok: true, reused: true, podId: existingSession.podId, endpoint: existingSession.endpoint });
     }
 
-    const pod = await startPod();
+    const gpuType = normalizeGpuType(req.body?.gpuType);
+    const pod = await startPod(gpuType);
     const podId = pod.id;
 
     // Poll until the pod is running and we have a public port (~1-2 min)
@@ -61,14 +88,14 @@ app.post('/start', requireToken, async (req, res) => {
 
     // Return endpoint immediately — client can show progress while server boots.
     // Inference server readiness check runs in background.
-    res.json({ ok: true, podId, endpoint });
+    res.json({ ok: true, podId, endpoint, gpuType });
 
     // Background: wait for inference server then forward face if needed
     ensureServerReadyBackground(activeSession);
 
   } catch (err) {
     console.error('Failed to start pod:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: formatStartError(err, normalizeGpuType(req.body?.gpuType)) });
   }
 });
 
@@ -143,6 +170,8 @@ app.post('/stream-profile', requireToken, async (req, res) => {
 
 // POST /stop — destroy GPU pod
 app.post('/stop', requireToken, async (req, res) => {
+  await waitForStopInFlight();
+
   const session = await getOrRecoverActiveSession();
   if (!session) {
     return res.status(404).json({ error: 'No active session' });
@@ -151,8 +180,25 @@ app.post('/stop', requireToken, async (req, res) => {
   const { podId } = session;
   clearActiveSession();
 
-  res.json({ ok: true });
-  stopPod(podId).catch(err => console.error('Failed to terminate pod (may already be gone):', err.message));
+  const stopPromise = stopPod(podId)
+    .catch(err => {
+      console.error('Failed to terminate pod (may already be gone):', err.message);
+      throw err;
+    })
+    .finally(() => {
+      if (stopInFlight === stopPromise) {
+        stopInFlight = null;
+      }
+    });
+
+  stopInFlight = stopPromise;
+
+  try {
+    await stopPromise;
+    res.json({ ok: true, podId });
+  } catch (err) {
+    res.status(502).json({ error: `Failed to terminate pod ${podId}: ${err.message}` });
+  }
 });
 
 // POST /upload-face — store face image and forward to GPU if running

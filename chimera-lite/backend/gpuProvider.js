@@ -8,7 +8,7 @@ const headers = () => ({
   Authorization: `Bearer ${config.RUNPOD_API_KEY}`,
 });
 
-async function startPod() {
+async function startPod(gpuType = config.RUNPOD_GPU_TYPE) {
   const networkVolumeField = config.RUNPOD_NETWORK_VOLUME_ID
     ? `networkVolumeId: "${config.RUNPOD_NETWORK_VOLUME_ID}",`
     : '';
@@ -21,7 +21,7 @@ async function startPod() {
         containerDiskInGb: ${config.RUNPOD_CONTAINER_DISK_GB},
         minVcpuCount: 2,
         minMemoryInGb: 16,
-        gpuTypeId: "${config.RUNPOD_GPU_TYPE}",
+        gpuTypeId: "${gpuType}",
         name: "chimera-lite-session",
         templateId: "${config.RUNPOD_TEMPLATE_ID}",
         ${networkVolumeField}

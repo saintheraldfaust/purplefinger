@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('chimera', {
   saveAppConfig: (config) => ipcRenderer.invoke('save-app-config', config),
   attachWarmPod: (podId) => ipcRenderer.invoke('attach-warm-pod', podId),
   getStatus:    () => ipcRenderer.invoke('get-status'),
-  startSession: () => ipcRenderer.invoke('start-session'),
+  startSession: (gpuType) => ipcRenderer.invoke('start-session', gpuType),
   checkReady:   () => ipcRenderer.invoke('check-ready'),
   stopSession:  () => ipcRenderer.invoke('stop-session'),
   getStreamProfile: () => ipcRenderer.invoke('get-stream-profile'),
