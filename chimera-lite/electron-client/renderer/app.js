@@ -279,7 +279,7 @@ function restartCaptureTimer() {
 }
 
 function doCapture() {
-  if (!dc || dc.readyState !== 'open') return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
   if (_encodes > 1) return;
   if (!captureVideo || captureVideo.readyState < 2) return;
 
@@ -294,8 +294,8 @@ function doCapture() {
     .then((blob) => {
       _encodes--;
       sentFrames++;
-      if (blob && dc && dc.readyState === 'open')
-        dc.send(blob);
+      if (blob && ws && ws.readyState === WebSocket.OPEN)
+        ws.send(blob);
     })
     .catch(() => _encodes--);
 }
@@ -384,7 +384,7 @@ btnResetPreview.addEventListener('click', () => setPreviewDefaults());
 btnModeRealtime.addEventListener('click', () => setProfile('realtime'));
 btnModeQuality.addEventListener('click', () => setProfile('quality'));
 btnSaveConfig.addEventListener('click', async () => {
-  if (dc || localStream || gpuIp) {
+  if (ws || localStream || gpuIp) {
     setConfigNote('Stop the current session before changing connection settings.');
     return;
   }
@@ -413,7 +413,7 @@ btnAttachPod.addEventListener('click', async () => {
     setConfigNote('Enter a warm pod ID before attaching it.');
     return;
   }
-  if (dc || localStream || gpuIp) {
+  if (ws || localStream || gpuIp) {
     setConfigNote('Stop the current session before attaching a different pod.');
     return;
   }
@@ -439,9 +439,8 @@ btnAttachPod.addEventListener('click', async () => {
   }
 });
 
-// --- WebRTC DataChannel stream state ---
-let pc           = null;  // RTCPeerConnection
-let dc           = null;  // RTCDataChannel (unreliable, unordered — UDP semantics)
+// --- WebSocket stream state ---
+let ws           = null;
 let localStream  = null;
 let captureVideo = null;  // hidden <video> to draw from
 let captureTimer = null;
@@ -482,59 +481,35 @@ async function startStreaming(ip, port) {
   remoteCanvas.height = 360;
   const displayCtx = remoteCanvas.getContext('2d');
 
-  // --- WebRTC DataChannel (unreliable + unordered = UDP semantics) ---
-  // Eliminates TCP head-of-line blocking: a slow frame doesn't stall the next one.
-  pc = new RTCPeerConnection({
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-  });
+  ws = new WebSocket(`ws://${ip}:${port}/ws`);
+  ws.binaryType = 'arraybuffer';
 
-  // Client creates the channel; server receives it via on('datachannel').
-  dc = pc.createDataChannel('frames', { ordered: false, maxRetransmits: 0 });
-  dc.binaryType = 'arraybuffer';
-
-  dc.onopen = () => {
+  ws.onopen = () => {
     videoEmpty.style.display = 'none';
     setLog(`Streaming — ${ip}:${port}`);
     startStats();
     _encodes = 0;
+
+    // Fire at 20fps; server always processes the latest frame so extra sends just
+    // update the queue — no lockstep stall waiting for a reply.
     captureTimer = setInterval(doCapture, 1000 / currentSendFps);
   };
 
-  dc.onmessage = (event) => {
+  ws.onmessage = (event) => {
     recvFrames++;
+    // Display in the Electron window — event.data is already ArrayBuffer
     createImageBitmap(new Blob([event.data], { type: 'image/jpeg' })).then((bitmap) => {
       displayCtx.drawImage(bitmap, 0, 0, remoteCanvas.width, remoteCanvas.height);
       bitmap.close();
     });
-    // Push to OBS Browser Source — raw ArrayBuffer, main process base64-encodes it.
+
+    // Push to OBS Browser Source — send raw ArrayBuffer, main process base64-encodes it.
+    // Eliminates the async FileReader + dataURL string overhead on the render process.
     window.chimera.obsFrame(event.data);
   };
 
-  dc.onerror = (e) => setLog('Stream error — check GPU pod');
-  dc.onclose = () => { if (gpuIp) setLog('Stream disconnected'); };
-
-  // Vanilla ICE: gather all candidates locally before sending the offer.
-  // Avoids trickle-ICE signalling complexity. Max 4s before sending anyway.
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  await new Promise((resolve) => {
-    if (pc.iceGatheringState === 'complete') { resolve(); return; }
-    pc.addEventListener('icegatheringstatechange', () => {
-      if (pc.iceGatheringState === 'complete') resolve();
-    });
-    setTimeout(resolve, 4000);
-  });
-
-  setLog(`Connecting to GPU — ${ip}:${port}...`);
-  const resp = await fetch(`http://${ip}:${port}/offer`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
-  });
-  if (!resp.ok) throw new Error(`Offer rejected: ${resp.status}`);
-  const answer = await resp.json();
-  await pc.setRemoteDescription(new RTCSessionDescription(answer));
-  // dc.onopen fires once ICE establishes and the DataChannel is ready.
+  ws.onerror = () => setLog('Stream error — check GPU pod');
+  ws.onclose = () => { if (gpuIp) setLog('Stream disconnected'); };
 }
 
 function stopStreaming() {
@@ -544,8 +519,7 @@ function stopStreaming() {
   stopStats();
   _encodes = 0;
 
-  if (dc) { try { dc.close(); } catch {} dc = null; }
-  if (pc) { try { pc.close(); } catch {} pc = null; }
+  if (ws) { ws.close(); ws = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   if (captureVideo) { captureVideo.srcObject = null; captureVideo = null; }
 

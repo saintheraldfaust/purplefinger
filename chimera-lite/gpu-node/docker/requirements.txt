@@ -14,7 +14,6 @@ realesrgan
 # Web server / streaming
 aiohttp
 aiohttp-cors
-aiortc
 
 # Vision / numerics
 opencv-python-headless
