@@ -289,17 +289,30 @@ class SwapEngine:
         swap_ms = (time.perf_counter() - swap_t0) * 1000
 
         blend_t0 = time.perf_counter()
+
+        # Compute valid mask BEFORE tone matching: pixels the inswapper warp
+        # did not cover are zero. Tone matching would corrupt their value.
+        valid_mask_raw = (swapped_roi.sum(axis=2, keepdims=True) > 0).astype(np.float32)
+
         swapped_roi = self._match_face_tone(swapped_roi, local_face, blend_assets)
-        valid_mask = (swapped_roi.sum(axis=2, keepdims=True) > 0).astype(np.float32)
-        if valid_mask.any():
-            valid_mask = cv2.GaussianBlur(valid_mask[:, :, 0], (21, 21), 4.0)[:, :, np.newaxis]
-            mask_f = np.minimum(blend_assets['blend_alpha'], valid_mask)
+
+        face_mask = blend_assets['blend_alpha']
+        if valid_mask_raw.any():
+            valid_mask_s = cv2.GaussianBlur(valid_mask_raw[:, :, 0], (21, 21), 4.0)[:, :, np.newaxis]
+            mask_f = np.minimum(face_mask, valid_mask_s)
         else:
-            mask_f = blend_assets['blend_alpha']
+            mask_f = face_mask
+
+        # gap_mask: face region the face_mask covers but the inswapper warp doesn't.
+        # This is typically the forehead — fill with tone-corrected original instead
+        # of raw dark skin so the full face matches the source complexion.
+        gap_mask = np.clip(face_mask - mask_f, 0.0, 1.0)
+        tone_original = self._match_face_tone(roi.copy(), local_face, blend_assets)
 
         out_roi = (
             swapped_roi.astype(np.float32) * mask_f +
-            roi.astype(np.float32) * (1.0 - mask_f)
+            tone_original.astype(np.float32) * gap_mask +
+            roi.astype(np.float32) * (1.0 - face_mask)
         ).astype(np.uint8)
 
         result = base_frame.copy()
@@ -516,21 +529,28 @@ class SwapEngine:
         if self._source_face is None or self._source_img is None or self._source_skin_stats is None:
             return swapped
 
-        x1, y1, x2, y2 = face.bbox.astype(int)
-        x1 = max(0, x1)
-        y1 = max(0, y1)
-        x2 = min(swapped.shape[1], x2)
-        y2 = min(swapped.shape[0], y2)
-        if x2 - x1 < 12 or y2 - y1 < 12:
+        target_mask = blend_assets['tone_mask']
+        tone_soft = blend_assets['tone_soft']
+
+        # Use the full extent of the tone mask rather than the face bbox.
+        # _build_complexion_mask extends the forehead bh*0.24 above y1, so using
+        # bbox clips would skip tone correction for the entire forehead region.
+        ys, xs = np.where(target_mask > 0)
+        if len(ys) == 0:
+            return swapped
+        h_s, w_s = swapped.shape[:2]
+        fy1 = max(0, int(ys.min()))
+        fy2 = min(h_s, int(ys.max()) + 1)
+        fx1 = max(0, int(xs.min()))
+        fx2 = min(w_s, int(xs.max()) + 1)
+        if fx2 - fx1 < 12 or fy2 - fy1 < 12:
             return swapped
 
-        target_mask = blend_assets['tone_mask']
-        region = target_mask[y1:y2, x1:x2] > 0
+        region = target_mask[fy1:fy2, fx1:fx2] > 0
         if int(region.sum()) < 64:
             return swapped
 
-        swapped_roi = swapped[y1:y2, x1:x2]
-
+        swapped_roi = swapped[fy1:fy2, fx1:fx2]
         swapped_lab = cv2.cvtColor(swapped_roi, cv2.COLOR_BGR2LAB).astype(np.float32)
         dst_mean_maps, dst_std_maps = self._build_vertical_stat_maps(swapped_roi.shape[0], swapped_roi.shape[1])
 
@@ -548,22 +568,24 @@ class SwapEngine:
 
             scale = dst_std / max(src_std, 1.0)
             if ch == 0:
-                scale = np.clip(scale, 0.82, 1.30)
+                # L channel: wider range for large lightness differences (e.g. dark→light skin)
+                scale = np.clip(scale, 0.75, 1.50)
             else:
-                scale = np.clip(scale, 0.76, 1.45)
+                scale = np.clip(scale, 0.68, 1.65)
 
             channel = (swapped_lab[:, :, ch] - src_mean) * scale + dst_mean
             if ch == 0:
-                delta = np.clip(channel - swapped_lab[:, :, ch], -36.0, 36.0)
+                # Allow up to 52 L* units shift — covers full dark-to-light skin range
+                delta = np.clip(channel - swapped_lab[:, :, ch], -52.0, 52.0)
             else:
-                delta = np.clip(channel - swapped_lab[:, :, ch], -24.0, 24.0)
+                delta = np.clip(channel - swapped_lab[:, :, ch], -34.0, 34.0)
             adjusted_lab[:, :, ch] = np.clip(swapped_lab[:, :, ch] + delta, 0.0, 255.0)
 
         adjusted_roi = cv2.cvtColor(adjusted_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        soft = blend_assets['tone_soft'][y1:y2, x1:x2]
+        soft = tone_soft[fy1:fy2, fx1:fx2]
 
         out = swapped.copy()
-        out[y1:y2, x1:x2] = (
+        out[fy1:fy2, fx1:fx2] = (
             adjusted_roi.astype(np.float32) * soft +
             swapped_roi.astype(np.float32) * (1.0 - soft)
         ).astype(np.uint8)
