@@ -218,19 +218,15 @@ class SwapEngine:
 
     def _make_blend_cache_key(self, face, h, w):
         bbox = np.asarray(getattr(face, 'bbox', np.zeros(4, dtype=np.float32)), dtype=np.float32)
-        # ÷16 rounding: cache hits whenever bbox drifts <8px — EMA-smoothed bbox
-        # moves only a few px per frame, so ÷4 caused cache misses every 1-2 frames
-        # triggering expensive distanceTransform + GaussianBlur recomputes (~50-90ms).
-        bbox_key = tuple(np.round(bbox / 16.0).astype(np.int32).tolist())
+        # ÷32 rounding: coarse enough that per-frame EMA drift and landmark
+        # jitter don't cause cache misses.  With smooth_alpha=0.92 and per-
+        # frame detection the bbox moves ~1-3px/frame; this keeps the mask
+        # stable and eliminates visible pulsing at the edges.
+        bbox_key = tuple(np.round(bbox / 32.0).astype(np.int32).tolist())
 
-        kps = getattr(face, 'kps', None)
-        if kps is not None:
-            kps_arr = np.asarray(kps, dtype=np.float32)[:5]
-            kps_key = tuple(np.round(kps_arr.reshape(-1) / 16.0).astype(np.int32).tolist())
-        else:
-            kps_key = ()
-
-        return (h, w, bbox_key, kps_key)
+        # Exclude kps from cache key — they jitter too much frame-to-frame
+        # and the mask shape is now primarily bbox+ellipse based.
+        return (h, w, bbox_key)
 
     def _store_blend_assets(self, key, assets):
         self._blend_asset_cache[key] = assets
@@ -321,7 +317,9 @@ class SwapEngine:
         # Result: exact geometric match, zero false positives from dark skin.
         swap_h, swap_w = swapped_face.shape[:2]
         clean_mask = np.ones((swap_h, swap_w), dtype=np.uint8) * 255
-        clean_mask = cv2.erode(clean_mask, np.ones((5, 5), np.uint8), iterations=1)
+        # 7×7 erosion clips 3px per side — fully excludes the bilinear
+        # dark fringe that warpAffine creates at the 128×128 boundary.
+        clean_mask = cv2.erode(clean_mask, np.ones((7, 7), np.uint8), iterations=1)
         valid_mask_raw = cv2.warpAffine(
             clean_mask,
             inverse_affine,
@@ -331,15 +329,14 @@ class SwapEngine:
             borderValue=0,
         ).astype(np.float32) / 255.0
 
-        # Replace dark fringe pixels in swapped_roi with original ROI pixels
-        # BEFORE tone matching and compositing. Even tiny mask leakage at the
-        # boundary would show dark interpolation artifacts otherwise.
+        # Replace fringe pixels with original ROI before tone matching.
         fringe = (valid_mask_raw < 0.05)
         for c in range(3):
             ch = swapped_roi[:, :, c]
             ch[fringe] = roi[:, :, c][fringe]
 
-        valid_mask_s = cv2.GaussianBlur(valid_mask_raw, (41, 41), 10.0)[:, :, np.newaxis]
+        # Wider blur for softer, invisible transition at the valid boundary.
+        valid_mask_s = cv2.GaussianBlur(valid_mask_raw, (51, 51), 12.0)[:, :, np.newaxis]
 
         swap_ms = (time.perf_counter() - swap_t0) * 1000
 
@@ -372,12 +369,13 @@ class SwapEngine:
         }
 
     def _build_face_mask(self, face, h, w):
-        """Build the full-face blend mask including forehead.
+        """Build the full-face blend mask using stable bbox+ellipse geometry.
 
-        lmk[:33] only traces the jawline (ear-to-ear around chin), missing
-        the forehead entirely.  We extend upward with a forehead polygon
-        and a bridging ellipse so that blend_alpha covers the entire
-        visible face — critical for cross-race complexion transfer.
+        Previous approach used lmk[:33] landmarks which jitter every frame,
+        causing visible pulsing at the mask boundary.  The EMA-smoothed bbox
+        is far more stable.  We use a main ellipse that covers forehead-to-
+        chin, plus a mild forehead extension clamped so it never overshoots
+        above the head when tilting upward.
         """
         mask = np.zeros((h, w), dtype=np.uint8)
         x1, y1, x2, y2 = face.bbox.astype(int)
@@ -388,34 +386,29 @@ class SwapEngine:
         cx = (x1 + x2) // 2
         cy = (y1 + y2) // 2
 
-        lmk = getattr(face, 'landmark_2d_106', None)
-        if lmk is not None:
-            contour = lmk[:33].astype(np.int32)
-            cv2.fillPoly(mask, [cv2.convexHull(contour)], 255)
+        # Main face ellipse: shifted slightly up to cover forehead, narrow
+        # enough to not bleed onto ears/background.
+        cv2.ellipse(
+            mask,
+            (cx, int(round(cy - bh * 0.06))),
+            (max(1, int(round(bw * 0.48))), max(1, int(round(bh * 0.58)))),
+            0, 0, 360, 255, -1,
+        )
 
-            # Forehead polygon: temple-to-temple up above bbox top
-            left_temple = contour[0]
-            right_temple = contour[32]
-            forehead_top = max(0, int(round(y1 - bh * 0.20)))
-            forehead_poly = np.array([
-                left_temple,
-                right_temple,
-                [int(round(right_temple[0] + bw * 0.04)), forehead_top],
-                [int(round(left_temple[0] - bw * 0.04)), forehead_top],
-            ], dtype=np.int32)
-            cv2.fillConvexPoly(mask, forehead_poly, 255)
+        # Forehead cap: small extension above the ellipse.  Clamped to at
+        # most 10% of bh above y1 so it can never overshoot the head top.
+        forehead_top = max(0, int(round(y1 - bh * 0.10)))
+        forehead_left = max(0, int(round(cx - bw * 0.36)))
+        forehead_right = min(w, int(round(cx + bw * 0.36)))
+        forehead_bottom = max(0, int(round(y1 + bh * 0.10)))
+        forehead_poly = np.array([
+            [forehead_left, forehead_bottom],
+            [forehead_right, forehead_bottom],
+            [forehead_right, forehead_top],
+            [forehead_left, forehead_top],
+        ], dtype=np.int32)
+        cv2.fillConvexPoly(mask, forehead_poly, 255)
 
-            # Bridging ellipse: smoothly connects jaw contour to forehead
-            cv2.ellipse(
-                mask,
-                (cx, int(round(cy - bh * 0.04))),
-                (max(1, int(round(bw * 0.50))), max(1, int(round(bh * 0.60)))),
-                0, 0, 360, 255, -1,
-            )
-        else:
-            cv2.ellipse(mask, (cx, cy),
-                        (max(1, (x2 - x1) // 2), max(1, (y2 - y1) // 2)),
-                        0, 0, 360, 255, -1)
         return mask
 
     def _build_complexion_mask(self, face, h, w):
@@ -440,18 +433,20 @@ class SwapEngine:
             0, 0, 360, 255, -1,
         )
 
-        lmk = getattr(face, 'landmark_2d_106', None)
-        if lmk is not None and len(lmk) >= 33:
-            contour = lmk[:33].astype(np.int32)
-            left_temple = contour[0]
-            right_temple = contour[32]
-            forehead_poly = np.array([
-                left_temple,
-                right_temple,
-                [int(round(right_temple[0] + bw * 0.06)), max(0, int(round(y1 - bh * 0.32)))],
-                [int(round(left_temple[0] - bw * 0.06)), max(0, int(round(y1 - bh * 0.32)))],
-            ], dtype=np.int32)
-            cv2.fillConvexPoly(mask, forehead_poly, 255)
+        # Forehead cap matching the face mask — clamped to avoid overshooting
+        # above the head on upward tilt.  Uses bbox geometry, not landmarks,
+        # for frame-to-frame stability.
+        forehead_top = max(0, int(round(y1 - bh * 0.14)))
+        forehead_left = max(0, int(round(cx - bw * 0.40)))
+        forehead_right = min(w, int(round(cx + bw * 0.40)))
+        forehead_bottom = max(0, int(round(y1 + bh * 0.10)))
+        forehead_poly = np.array([
+            [forehead_left, forehead_bottom],
+            [forehead_right, forehead_bottom],
+            [forehead_right, forehead_top],
+            [forehead_left, forehead_top],
+        ], dtype=np.int32)
+        cv2.fillConvexPoly(mask, forehead_poly, 255)
 
         return mask
 
