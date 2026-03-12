@@ -138,18 +138,41 @@ class SwapEngine:
             return curr
         return self._smooth_alpha * curr + (1.0 - self._smooth_alpha) * prev
 
+    def _smooth_array_alpha(self, prev, curr, alpha):
+        curr = np.asarray(curr, dtype=np.float32)
+        if prev is None or alpha >= 0.999:
+            return curr
+        return alpha * curr + (1.0 - alpha) * prev
+
     def _build_tracked_face(self, face):
-        face.bbox = self._smooth_array(self._smoothed_bbox, face.bbox)
+        # Velocity-adaptive smoothing: if the face jumped far (fast head turn),
+        # snap immediately instead of EMA-lagging behind.  This eliminates the
+        # 'sticky makeup filter' effect on quick movement.
+        alpha = self._smooth_alpha
+        if self._smoothed_bbox is not None:
+            prev = self._smoothed_bbox
+            curr = np.asarray(face.bbox, dtype=np.float32)
+            bw = max(1.0, (prev[2] - prev[0] + curr[2] - curr[0]) * 0.5)
+            bh = max(1.0, (prev[3] - prev[1] + curr[3] - curr[1]) * 0.5)
+            dx = abs((curr[0] + curr[2]) - (prev[0] + prev[2])) * 0.5
+            dy = abs((curr[1] + curr[3]) - (prev[1] + prev[3])) * 0.5
+            shift_frac = max(dx / bw, dy / bh)
+            if shift_frac > 0.12:
+                # Big jump — snap to new position, flush stale blend cache
+                alpha = 1.0
+                self._blend_asset_cache.clear()
+
+        face.bbox = self._smooth_array_alpha(self._smoothed_bbox, face.bbox, alpha)
         self._smoothed_bbox = face.bbox.copy()
 
         kps = getattr(face, 'kps', None)
         if kps is not None:
-            face.kps = self._smooth_array(self._smoothed_kps, kps)
+            face.kps = self._smooth_array_alpha(self._smoothed_kps, kps, alpha)
             self._smoothed_kps = face.kps.copy()
 
         lmk = getattr(face, 'landmark_2d_106', None)
         if lmk is not None:
-            face.landmark_2d_106 = self._smooth_array(self._smoothed_lmk106, lmk)
+            face.landmark_2d_106 = self._smooth_array_alpha(self._smoothed_lmk106, lmk, alpha)
             self._smoothed_lmk106 = face.landmark_2d_106.copy()
 
         return face

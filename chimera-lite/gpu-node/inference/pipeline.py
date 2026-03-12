@@ -25,9 +25,9 @@ STREAM_PROFILES = {
     'realtime': {
         'enhance_enabled': False,
         'enhance_every_n': 0,
-        'detect_every_n': 3,   # was 6 — detect every 150ms at 20 FPS (was 300ms), halves position lag
-        'smooth_alpha': 0.75,  # was 0.45 — converges 75% toward new position each detect frame (was 45%)
-        'stale_face_ttl': 6,   # was 12 — proportional to detect_every_n; clears after ~18 frames
+        'detect_every_n': 1,   # every frame — ROI detection is only ~3-5ms on RTX 5090/4090
+        'smooth_alpha': 0.92,  # fast convergence; velocity-adaptive code snaps on big moves
+        'stale_face_ttl': 2,   # clear after 2 consecutive misses (~100ms) — no ghost overlay
         'proc_w': 512,
         'proc_h': 288,
         'jpeg_quality': 85,
