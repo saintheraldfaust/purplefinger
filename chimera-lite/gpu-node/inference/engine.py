@@ -335,27 +335,30 @@ class SwapEngine:
             ch = swapped_roi[:, :, c]
             ch[fringe] = roi[:, :, c][fringe]
 
-        # Wider blur for softer, invisible transition at the valid boundary.
-        valid_mask_s = cv2.GaussianBlur(valid_mask_raw, (51, 51), 12.0)[:, :, np.newaxis]
+        # Soft valid blend mask — used to seamlessly transition from inswapper
+        # output to tone-corrected original at the 128×128 boundary.
+        valid_blend = cv2.GaussianBlur(valid_mask_raw, (51, 51), 12.0)[:, :, np.newaxis]
 
         swap_ms = (time.perf_counter() - swap_t0) * 1000
 
         blend_t0 = time.perf_counter()
 
         swapped_roi = self._match_face_tone(swapped_roi, local_face, blend_assets)
-
-        face_mask = blend_assets['blend_alpha']
-        mask_f = np.minimum(face_mask, valid_mask_s)
-
-        # gap_mask: face region the face_mask covers but the inswapper warp doesn't.
-        # This is typically the forehead — fill with tone-corrected original instead
-        # of raw dark skin so the full face matches the source complexion.
-        gap_mask = np.clip(face_mask - mask_f, 0.0, 1.0)
         tone_original = self._match_face_tone(roi.copy(), local_face, blend_assets)
 
+        # Pre-blend: smoothly merge swapped face into tone-corrected original
+        # using the valid mask.  This eliminates the seam line at the top of
+        # the 128×128 square — instead of a hard cut between two different
+        # pixel sources, the transition goes through matching-tone pixels.
+        merged_face = (
+            swapped_roi.astype(np.float32) * valid_blend +
+            tone_original.astype(np.float32) * (1.0 - valid_blend)
+        )
+
+        # Final composite: merged face → background via the face-shaped mask
+        face_mask = blend_assets['blend_alpha']
         out_roi = (
-            swapped_roi.astype(np.float32) * mask_f +
-            tone_original.astype(np.float32) * gap_mask +
+            merged_face * face_mask +
             roi.astype(np.float32) * (1.0 - face_mask)
         ).astype(np.uint8)
 
