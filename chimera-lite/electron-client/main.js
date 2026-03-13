@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
@@ -381,6 +381,22 @@ ipcMain.handle('attach-warm-pod', async (_event, podId) => {
   writeConfigFile(appConfig);
 
   return res.data;
+});
+
+// Open the bundled DroidCam drivers folder in system file explorer
+ipcMain.handle('open-drivers-folder', async () => {
+  // In dev: droidcamdrivers is in __dirname.  In prod: it's in process.resourcesPath.
+  const candidates = [
+    path.join(process.resourcesPath, 'droidcamdrivers'),
+    path.join(__dirname, 'droidcamdrivers'),
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(dir)) {
+      await shell.openPath(dir);
+      return { ok: true, path: dir };
+    }
+  }
+  throw new Error('DroidCam drivers folder not found. Reinstall the app.');
 });
 
 // Renderer sends each swapped JPEG frame as a raw ArrayBuffer.

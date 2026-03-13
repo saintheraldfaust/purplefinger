@@ -6,6 +6,10 @@ const btnAttachPod    = document.getElementById('btn-attach-pod');
 const btnResetPreview = document.getElementById('btn-reset-preview');
 const btnModeRealtime = document.getElementById('btn-mode-realtime');
 const btnModeQuality  = document.getElementById('btn-mode-quality');
+const btnOpenTutorial = document.getElementById('btn-open-tutorial');
+const btnCloseTutorial = document.getElementById('btn-close-tutorial');
+const btnOpenDrivers  = document.getElementById('btn-open-drivers');
+const tutorialOverlay = document.getElementById('tutorial-overlay');
 const faceInput       = document.getElementById('face-input');
 const facePreview     = document.getElementById('face-preview');
 const statusBadge     = document.getElementById('status-badge');
@@ -650,6 +654,36 @@ btnStop.addEventListener('click', async () => {
   }
 
   setLoading(false);
+});
+
+// --- Tutorial / Setup Guide ---
+btnOpenTutorial.addEventListener('click', () => {
+  tutorialOverlay.classList.add('visible');
+  // Update the OBS URL references inside the tutorial
+  const obsUrl = obsUrlLabel.textContent || 'http://localhost:7891';
+  const tutUrl1 = document.getElementById('tut-obs-url');
+  const tutUrl2 = document.getElementById('tut-obs-url-2');
+  if (tutUrl1) tutUrl1.textContent = obsUrl;
+  if (tutUrl2) tutUrl2.textContent = obsUrl;
+});
+
+btnCloseTutorial.addEventListener('click', () => {
+  tutorialOverlay.classList.remove('visible');
+});
+
+btnOpenDrivers.addEventListener('click', async () => {
+  try {
+    await window.chimera.openDriversFolder();
+  } catch (err) {
+    setLog('Could not open drivers folder: ' + err.message);
+  }
+});
+
+// Close tutorial on Escape key
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && tutorialOverlay.classList.contains('visible')) {
+    tutorialOverlay.classList.remove('visible');
+  }
 });
 
 // --- Init: reconnect to existing session ---

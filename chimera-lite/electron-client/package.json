@@ -38,6 +38,10 @@
       {
         "from": ".env.example",
         "to": ".env.example"
+      },
+      {
+        "from": "droidcamdrivers",
+        "to": "droidcamdrivers"
       }
     ],
     "win": {

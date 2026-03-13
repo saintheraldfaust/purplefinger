@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('chimera', {
   getStreamProfile: () => ipcRenderer.invoke('get-stream-profile'),
   setStreamProfile: (profile) => ipcRenderer.invoke('set-stream-profile', profile),
   uploadFace:   (buffer, filename) => ipcRenderer.invoke('upload-face', buffer, filename),
+  openDriversFolder: () => ipcRenderer.invoke('open-drivers-folder'),
   // Push each swapped frame to the OBS Browser Source server (fire-and-forget)
   obsFrame:     (dataUrl) => ipcRenderer.send('obs-frame', dataUrl),
 });

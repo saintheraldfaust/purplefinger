@@ -425,6 +425,175 @@
     #obs-hint span { color: #7dd3fc; }
     input[type="file"] { display: none; }
 
+    /* --- Tutorial Overlay --- */
+    #tutorial-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      display: none;
+      align-items: start;
+      justify-content: center;
+      background: rgba(2, 6, 23, 0.96);
+      backdrop-filter: blur(18px);
+      overflow-y: auto;
+      padding: 30px 20px 60px;
+    }
+    #tutorial-overlay.visible { display: flex; }
+
+    #tutorial-card {
+      width: min(860px, 100%);
+      border-radius: 24px;
+      border: 1px solid rgba(96, 165, 250, 0.22);
+      background: rgba(8, 14, 30, 0.92);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+    }
+
+    #tutorial-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      border-bottom: 1px solid rgba(96, 165, 250, 0.14);
+      background: rgba(15, 23, 42, 0.78);
+    }
+
+    #tutorial-topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #tutorial-title {
+      font-size: 0.82rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #93c5fd;
+      font-weight: 800;
+    }
+
+    #btn-close-tutorial {
+      background: rgba(239, 68, 68, 0.18);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+      border-radius: 10px;
+      padding: 6px 16px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    #btn-close-tutorial:hover { background: rgba(239, 68, 68, 0.32); }
+
+    #tutorial-body {
+      padding: 28px 30px 36px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+      color: #cbd5e1;
+      font-size: 0.88rem;
+      line-height: 1.7;
+    }
+
+    .tut-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .tut-section h2 {
+      font-size: 1.05rem;
+      color: #93c5fd;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+
+    .tut-section h3 {
+      font-size: 0.92rem;
+      color: #60a5fa;
+      font-weight: 700;
+      margin-top: 6px;
+    }
+
+    .tut-section ol, .tut-section ul {
+      padding-left: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .tut-section code {
+      background: rgba(30, 41, 59, 0.8);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 0.84rem;
+      color: #7dd3fc;
+      font-family: Consolas, 'Courier New', monospace;
+    }
+
+    .tut-step-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--blue) 0%, #0ea5e9 100%);
+      color: white;
+      font-size: 0.74rem;
+      font-weight: 800;
+      flex-shrink: 0;
+      margin-right: 8px;
+    }
+
+    .tut-numbered-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 2px;
+    }
+
+    .tut-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(17, 24, 39, 0.9);
+      color: var(--text);
+      padding: 10px 16px;
+      font-size: 0.84rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.12s, transform 0.12s;
+      width: fit-content;
+    }
+    .tut-btn:hover { background: rgba(29, 78, 216, 0.18); transform: translateY(-1px); }
+
+    .tut-highlight {
+      background: rgba(37, 99, 235, 0.12);
+      border: 1px solid rgba(96, 165, 250, 0.22);
+      border-radius: 14px;
+      padding: 16px 18px;
+    }
+
+    .tut-divider {
+      height: 1px;
+      background: rgba(96, 165, 250, 0.12);
+    }
+
+    .tut-footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.78rem;
+      padding-top: 10px;
+    }
+
+    .tut-footer a {
+      color: #60a5fa;
+      text-decoration: none;
+    }
+    .tut-footer a:hover { text-decoration: underline; }
+
     #launch-overlay {
       position: fixed;
       inset: 0;
@@ -715,6 +884,12 @@
           <div class="stat-box"><div class="stat-label">Mode / Cap</div><div class="stat-val" id="st-mode">—</div></div>
         </div>
       </section>
+
+      <section class="panel">
+        <div class="panel-title">Help &amp; Setup</div>
+        <div class="panel-copy">Step-by-step guide on setting up OBS, DroidCam, and making video calls with your swapped face.</div>
+        <button id="btn-open-tutorial" class="ghost-btn">📖  Open Setup Guide</button>
+      </section>
     </aside>
 
     <main id="main">
@@ -739,6 +914,144 @@
     <div id="log">Ready</div>
     <div id="obs-hint">OBS Browser Source → <span id="obs-url">http://localhost:7891</span></div>
   </footer>
+
+  <!-- Tutorial / Setup Guide Overlay -->
+  <div id="tutorial-overlay">
+    <div id="tutorial-card">
+      <div id="tutorial-topbar">
+        <div id="tutorial-topbar-left">
+          <span class="launch-dot"></span>
+          <span class="launch-dot"></span>
+          <span class="launch-dot"></span>
+          <div id="tutorial-title">Setup Guide — Chimera Lite</div>
+        </div>
+        <button id="btn-close-tutorial">✕  Close</button>
+      </div>
+
+      <div id="tutorial-body">
+
+        <div class="tut-section">
+          <h2>How It Works</h2>
+          <p>Chimera Lite swaps your face in real time on a remote GPU and streams the result back to your PC. The swapped video is served as a <strong>Browser Source</strong> that OBS captures. From OBS, you route the video through <strong>DroidCam's virtual camera</strong> — which apps like <strong>WhatsApp Desktop, Zoom, Google Meet</strong>, and others recognize as a real webcam.</p>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- STEP 1 -->
+        <div class="tut-section">
+          <h2>Step 1 — Install DroidCam Drivers</h2>
+          <p>Three installers are bundled with the app. Install them <strong>in this order</strong>:</p>
+          <ol>
+            <li><strong>DroidCam.Drivers.7.1.2.exe</strong> — Installs the DroidCam virtual webcam device that other apps see.</li>
+            <li><strong>DroidCam.OBSVirtualOut.Plugin.0.2.2.exe</strong> — OBS plugin that routes video to the DroidCam virtual device.</li>
+            <li><strong>DroidCamOBS.Setup.2.4.2.exe</strong> — The DroidCam OBS client (optional, for mobile camera integration).</li>
+          </ol>
+          <p>After installing, <strong>restart your PC</strong> once for the virtual camera driver to register.</p>
+          <button id="btn-open-drivers" class="tut-btn">📂  Open Drivers Folder</button>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- STEP 2 -->
+        <div class="tut-section">
+          <h2>Step 2 — Configure OBS Studio</h2>
+          <p>Open OBS Studio (download from <code>obsproject.com</code> if you don't have it).</p>
+
+          <h3>2a. Add the Browser Source</h3>
+          <ol>
+            <li>In the <strong>Sources</strong> panel, click <strong>+</strong> → <strong>Browser</strong>.</li>
+            <li>Name it <code>Chimera Face Swap</code> (or anything you like).</li>
+            <li>Set the URL to: <code id="tut-obs-url">http://localhost:7891</code></li>
+            <li>Set <strong>Width</strong> to <code>512</code> and <strong>Height</strong> to <code>288</code>.</li>
+            <li>Check <strong>"Shutdown source when not visible"</strong> to save resources when you switch scenes.</li>
+            <li>Click <strong>OK</strong>. You should see a black rectangle — it will show the swapped video once a session is running.</li>
+          </ol>
+
+          <h3>2b. Set Up Audio (Microphone)</h3>
+          <ol>
+            <li>Go to <strong>Settings → Audio</strong>.</li>
+            <li>Under <strong>Mic/Auxiliary Audio</strong>, select your real microphone (e.g. <code>Microphone (Realtek Audio)</code>).</li>
+            <li>Leave Desktop Audio on Default or disabled — you only need your mic for calls.</li>
+            <li>Click <strong>Apply</strong> → <strong>OK</strong>.</li>
+          </ol>
+
+          <h3>2c. Scene Layout</h3>
+          <ol>
+            <li>Right-click the Browser Source in the preview → <strong>Transform → Fit to Screen</strong>. This fills the canvas.</li>
+            <li>That's your only source — the face-swapped video. Your real mic is captured separately via the audio settings.</li>
+          </ol>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- STEP 3 -->
+        <div class="tut-section">
+          <h2>Step 3 — Activate DroidCam Virtual Output</h2>
+          <p>This is the key step that makes WhatsApp and other apps see your swapped face as a real webcam.</p>
+          <ol>
+            <li>In OBS, go to the menu bar → <strong>Tools → DroidCam OBS Virtual Output</strong>.</li>
+            <li>Click <strong>Start</strong> in the dialog that appears.</li>
+            <li>The status should change to <strong>"Active"</strong>. OBS is now routing the canvas output (your swapped face) to the DroidCam virtual camera device.</li>
+          </ol>
+          <div class="tut-highlight">
+            <strong>Why DroidCam instead of OBS Virtual Camera?</strong><br>
+            WhatsApp Desktop, some Zoom versions, and other apps don't recognize the default OBS Virtual Camera. DroidCam's virtual device registers as a standard DirectShow webcam, so every app sees it — WhatsApp, Zoom, Meet, Teams, Discord, etc.
+          </div>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- STEP 4 -->
+        <div class="tut-section">
+          <h2>Step 4 — Start Chimera Lite</h2>
+          <ol>
+            <li>In the Chimera Lite app, <strong>upload your source face</strong> (the identity photo you want to appear as).</li>
+            <li>Click <strong>Start Session</strong>. Wait for the GPU pod to boot (~30-90 seconds).</li>
+            <li>Once connected, your webcam feed is sent to the GPU, swapped in real time, and streamed back.</li>
+            <li>Check the OBS preview — your Browser Source should now show the face-swapped video.</li>
+          </ol>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- STEP 5 -->
+        <div class="tut-section">
+          <h2>Step 5 — Make a Video Call</h2>
+          <ol>
+            <li>Open <strong>WhatsApp Desktop</strong> (or Zoom, Meet, Discord, etc.).</li>
+            <li>Start a video call. When asked for your camera, select <strong>"DroidCam Source"</strong> from the camera dropdown.</li>
+            <li>For audio, select your real microphone — this is routed directly, not through OBS.</li>
+            <li>The other person sees your face-swapped video in real time. Your voice is your real voice.</li>
+          </ol>
+          <div class="tut-highlight">
+            <strong>Tip:</strong> Keep OBS running in the background with <strong>DroidCam Virtual Output active</strong> during the call. If you close OBS, the virtual camera feed stops.
+          </div>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- TROUBLESHOOTING -->
+        <div class="tut-section">
+          <h2>Troubleshooting</h2>
+          <ul>
+            <li><strong>"DroidCam Source" not showing in WhatsApp</strong> — Restart your PC after installing the DroidCam drivers. The virtual camera device needs a reboot to register.</li>
+            <li><strong>Black screen in OBS Browser Source</strong> — Make sure a Chimera Lite session is running and the OBS URL matches: <code id="tut-obs-url-2">http://localhost:7891</code></li>
+            <li><strong>"Tools → DroidCam OBS Virtual Output" missing</strong> — Install <code>DroidCam.OBSVirtualOut.Plugin.0.2.2.exe</code> and restart OBS.</li>
+            <li><strong>Low FPS or laggy video</strong> — Use <strong>Realtime</strong> mode. Ensure your internet upload speed is at least 5 Mbps with &lt;80ms latency to the GPU datacenter.</li>
+            <li><strong>WhatsApp call has no audio</strong> — Audio is separate from OBS. In WhatsApp's call settings, select your real microphone and real speakers/headset.</li>
+          </ul>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <div class="tut-footer">
+          <p><strong>Chimera Lite</strong> by <strong>Saint H.</strong></p>
+          <p><a href="https://github.com/saintheraldfaust" target="_blank">github.com/saintheraldfaust</a></p>
+        </div>
+
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>
