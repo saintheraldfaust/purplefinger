@@ -2,7 +2,7 @@
 # Keep this list aligned with bootstrap import checks and inference imports.
 
 # Inference
-onnxruntime-gpu==1.17.1
+# onnxruntime-gpu installed separately with CUDA 12 index (see Dockerfile)
 insightface
 
 # Face enhancement stack

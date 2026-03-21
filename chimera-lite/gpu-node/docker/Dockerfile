@@ -16,6 +16,7 @@ WORKDIR /opt/chimera
 COPY docker/requirements.txt .
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
     python3 -m pip uninstall -y onnxruntime onnxruntime-gpu 2>/dev/null; \
+    python3 -m pip install --no-cache-dir onnxruntime-gpu --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/ && \
     python3 -m pip install --no-cache-dir -r requirements.txt && \
     python3 - <<'PYEOF'
 import site, os
