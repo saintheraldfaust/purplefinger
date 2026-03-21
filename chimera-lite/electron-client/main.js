@@ -345,6 +345,11 @@ ipcMain.handle('license-login', async (_event, inputProductKey) => {
   licenseSessionToken = String(res.data?.token || '').trim();
   licenseSessionUser = res.data?.user || null;
   appConfig.licenseKey = productKey;
+
+  // Auto-fill API token from backend so user never has to enter it
+  if (res.data?.apiToken) {
+    appConfig.apiToken = String(res.data.apiToken).trim();
+  }
   writeConfigFile(appConfig);
 
   return {

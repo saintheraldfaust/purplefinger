@@ -126,6 +126,7 @@ app.post('/auth/product-login', async (req, res) => {
       ok: true,
       token: session.token,
       expiresInSec: session.expiresInSec,
+      apiToken: config.API_TOKEN,
       user: {
         id: session.user._id,
         name: session.user.name,

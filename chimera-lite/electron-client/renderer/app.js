@@ -98,7 +98,7 @@ function applyConfigToUI(config) {
   if (cfgRunpodGpuType) cfgRunpodGpuType.value = config.runpodGpuType || 'NVIDIA GeForce RTX 5090';
   if (obsUrlLabel) obsUrlLabel.textContent = config.obsUrl || `http://localhost:${config.obsPort || 7891}`;
   const pathHint = config.configPath ? `Saved locally at ${config.configPath}` : 'Saved locally on this machine.';
-  setConfigNote(`${pathHint}\nProduct key is used for customer login each run. API token is optional for admin/service usage. Stop any active session before changing these values.`);
+  setConfigNote(`${pathHint}\nAPI token is auto-filled when you login with your product key. Stop any active session before changing these values.`);
 }
 
 let licenseLoggedIn = false;

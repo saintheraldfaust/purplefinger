@@ -868,14 +868,9 @@
       <section class="panel">
         <div class="panel-title">Connection Settings</div>
         <div class="field-stack">
-          <label class="field-label">
-            <span>Backend URL</span>
-            <input id="cfg-backend-url" class="text-input" type="text" placeholder="https://purplefinger-chimera.onrender.com" />
-          </label>
-          <label class="field-label">
-            <span>API Token</span>
-            <input id="cfg-api-token" class="text-input" type="password" placeholder="Optional admin/service token" />
-          </label>
+          <!-- Backend URL and API Token are auto-filled on product key login -->
+          <input id="cfg-backend-url" type="hidden" value="https://purplefinger-chimera.onrender.com" />
+          <input id="cfg-api-token" type="hidden" />
           <label class="field-label">
             <span>OBS Port</span>
             <input id="cfg-obs-port" class="text-input" type="number" min="1" max="65535" placeholder="7891" />
@@ -894,7 +889,7 @@
           <button id="btn-attach-pod" class="ghost-btn">Attach Warm Pod</button>
           <button id="btn-save-config" class="ghost-btn">Save Connection Settings</button>
         </div>
-        <div class="panel-copy" id="config-note">Saved locally on this machine. Stop any active session before changing these values.</div>
+        <div class="panel-copy" id="config-note">Saved locally on this machine. API token is auto-filled when you login with your product key. Stop any active session before changing these values.</div>
       </section>
 
       <section class="panel">
