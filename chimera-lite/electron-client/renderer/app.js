@@ -69,6 +69,11 @@ const connHint        = document.getElementById('conn-hint');
 const reconnectBanner = document.getElementById('reconnect-banner');
 const reconnectMsg    = document.getElementById('reconnect-msg');
 const btnReconnect    = document.getElementById('btn-reconnect');
+const privacyShield   = document.getElementById('privacy-shield');
+const shieldTitle     = document.getElementById('shield-title');
+const shieldSub       = document.getElementById('shield-sub');
+const shieldScore     = document.getElementById('shield-score');
+const chkPrivacyShield = document.getElementById('chk-privacy-shield');
 const modeSummary     = document.getElementById('mode-summary');
 
 function setStatus(text, cls) {
@@ -243,6 +248,65 @@ function startBeeping() {
 
 function stopBeeping() {
   if (_beepInterval) { clearInterval(_beepInterval); _beepInterval = null; }
+}
+
+// --- Audio Level Meter (microphone visualizer) ---
+let _micStream = null;
+let _micSource = null;
+let _micAnalyser = null;
+let _micAnimFrame = null;
+const METER_BAR_COUNT = 8;
+// Frequency bands to sample (low-to-high voice range)
+const METER_BANDS = [2, 4, 6, 9, 12, 16, 20, 25];
+
+async function startAudioMeter() {
+  try {
+    _micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const ctx = _ensureAudioCtx();
+    _micSource = ctx.createMediaStreamSource(_micStream);
+    _micAnalyser = ctx.createAnalyser();
+    _micAnalyser.fftSize = 128;
+    _micAnalyser.smoothingTimeConstant = 0.7;
+    _micSource.connect(_micAnalyser);
+    // Do NOT connect to destination — we only visualize, no playback
+
+    if (audioMeter) audioMeter.classList.add('visible');
+    _drawMeter();
+  } catch (err) {
+    console.log('Audio meter unavailable:', err.message);
+  }
+}
+
+function _drawMeter() {
+  if (!_micAnalyser) return;
+  const data = new Uint8Array(_micAnalyser.frequencyBinCount);
+  _micAnalyser.getByteFrequencyData(data);
+
+  for (let i = 0; i < METER_BAR_COUNT; i++) {
+    const bin = METER_BANDS[i] || i;
+    const val = data[bin] || 0;
+    const pct = Math.max(3, (val / 255) * 100);
+    const bar = meterBars[i];
+    if (bar) {
+      bar.style.height = `${pct}%`;
+      // Color: green → yellow → red
+      if (pct > 75) bar.style.background = '#f87171';
+      else if (pct > 50) bar.style.background = '#fbbf24';
+      else bar.style.background = '#34d399';
+    }
+  }
+
+  _micAnimFrame = requestAnimationFrame(_drawMeter);
+}
+
+function stopAudioMeter() {
+  if (_micAnimFrame) { cancelAnimationFrame(_micAnimFrame); _micAnimFrame = null; }
+  if (_micSource) { try { _micSource.disconnect(); } catch (_) {} _micSource = null; }
+  if (_micStream) { _micStream.getTracks().forEach(t => t.stop()); _micStream = null; }
+  _micAnalyser = null;
+  if (audioMeter) audioMeter.classList.remove('visible');
+  // Reset bars
+  meterBars.forEach(b => { if (b) { b.style.height = '3px'; b.style.background = '#34d399'; } });
 }
 let _unreadCount = 0;
 
@@ -652,7 +716,7 @@ function computeConnScore(sendFps, recvFps, latencyMs) {
 function getGrade(score) {
   if (score >= 80) return { label: 'Excellent', cls: 'excellent', hint: '' };
   if (score >= 60) return { label: 'Good', cls: 'good', hint: 'Stable connection' };
-  if (score >= 35) return { label: 'Fair', cls: 'fair', hint: 'Try Realtime mode or check upload speed' };
+  if (score >= 35) return { label: 'Fair', cls: 'fair', hint: 'Check your internet speed' };
   return { label: 'Poor', cls: 'poor', hint: 'High packet loss — consider reconnecting' };
 }
 
@@ -697,6 +761,9 @@ function updateConnScore(sendFps, recvFps, latencyMs) {
   } else {
     hideReconnectBanner();
   }
+
+  // Privacy Shield — hide video output when connection is poor
+  updatePrivacyShield(avg);
 }
 
 function showConnScore() {
@@ -721,18 +788,57 @@ function hideReconnectBanner() {
   if (reconnectBanner) reconnectBanner.classList.remove('visible');
 }
 
+// --- Privacy Shield ---
+let _shieldActive = false;
+const SHIELD_ENGAGE_THRESHOLD = 25;  // score at or below → engage
+const SHIELD_RELEASE_THRESHOLD = 50; // score at or above → release
+const SHIELD_MIN_SAMPLES = 3;        // need this many history entries
+
+function updatePrivacyShield(score) {
+  const enabled = chkPrivacyShield && chkPrivacyShield.checked;
+  if (!enabled) {
+    if (_shieldActive) hidePrivacyShield();
+    return;
+  }
+
+  if (!_shieldActive && score <= SHIELD_ENGAGE_THRESHOLD && _connHistory.length >= SHIELD_MIN_SAMPLES) {
+    showPrivacyShield(score);
+  } else if (_shieldActive && score >= SHIELD_RELEASE_THRESHOLD) {
+    hidePrivacyShield();
+  } else if (_shieldActive) {
+    // Update the score readout while shield is showing
+    if (shieldScore) shieldScore.textContent = `Connection quality: ${score}% — waiting for improvement`;
+  }
+}
+
+function showPrivacyShield(score) {
+  _shieldActive = true;
+  if (privacyShield) privacyShield.classList.add('visible');
+  if (shieldTitle) shieldTitle.textContent = 'Video Hidden — Poor Connection';
+  if (shieldSub) shieldSub.textContent = 'Your stream is temporarily hidden to protect your identity while the connection recovers. Video will resume automatically when quality improves.';
+  if (shieldScore) shieldScore.textContent = `Connection quality: ${score}%`;
+}
+
+function hidePrivacyShield() {
+  _shieldActive = false;
+  if (privacyShield) privacyShield.classList.remove('visible');
+}
+
 async function doReconnect() {
-  if (!gpuIp || !gpuPort) return;
-  const ip = gpuIp;
-  const port = gpuPort;
+  // Grab the endpoint before we tear things down
+  const ip = gpuIp || _lastGpuIp;
+  const port = gpuPort || _lastGpuPort;
+  if (!ip || !port) return;
 
   hideReconnectBanner();
+  hidePrivacyShield();
   setLog('Reconnecting stream...');
   setStatus('Reconnecting...', 'loading');
 
-  // Tear down current WS + camera without clearing gpuIp (we'll reuse it)
+  // Tear down current WS + camera
   _captureLoopActive = false;
   stopStats();
+  stopAudioMeter();
   if (ws) { try { ws.close(); } catch (_) {} ws = null; }
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
   if (captureVideo) { captureVideo.srcObject = null; captureVideo = null; }
@@ -751,6 +857,10 @@ async function doReconnect() {
   } catch (err) {
     setStatus('Error', 'error');
     setLog('Reconnect failed: ' + err.message);
+    // Keep the endpoint available for another retry
+    _lastGpuIp = ip;
+    _lastGpuPort = port;
+    showReconnectBanner('Reconnect failed — tap to try again');
   }
 }
 
@@ -962,12 +1072,16 @@ let captureVideo = null;  // hidden <video> to draw from
 let captureTimer = null;  // unused but kept to avoid reference errors in restartCaptureTimer
 let gpuIp        = null;
 let gpuPort      = null;
+let _lastGpuIp   = null;
+let _lastGpuPort = null;
 let offscreen    = null;
 let offCtx       = null;
 
 async function startStreaming(ip, port) {
   gpuIp = ip;
   gpuPort = port;
+  _lastGpuIp = ip;
+  _lastGpuPort = port;
 
   setLog('Requesting camera...');
   startBeeping(); // beep while waiting for camera + stream connection
@@ -1012,6 +1126,7 @@ async function startStreaming(ip, port) {
     hideVideoEmpty();
     setLog(`Streaming — ${ip}:${port}`);
     startStats();
+    startAudioMeter();
     _captureLoopActive = true;
     _captureLoop();
   };
@@ -1029,16 +1144,29 @@ async function startStreaming(ip, port) {
     window.chimera.obsFrame(event.data);
   };
 
-  ws.onerror = () => setLog('Stream error — check GPU pod');
-  ws.onclose = () => { if (gpuIp) setLog('Stream disconnected'); };
+  ws.onerror = () => {
+    setLog('Stream error — check GPU pod');
+    showReconnectBanner('Stream error — tap to reconnect');
+  };
+  ws.onclose = () => {
+    if (gpuIp) {
+      setLog('Stream disconnected');
+      showReconnectBanner('Stream disconnected — tap to reconnect');
+    }
+  };
 }
 
 function stopStreaming() {
   gpuIp = null;
+  gpuPort = null;
+  _lastGpuIp = null;
+  _lastGpuPort = null;
   _captureLoopActive = false;
   stopStats();
+  stopAudioMeter();
   hideConnScore();
   hideReconnectBanner();
+  hidePrivacyShield();
 
   if (ws) { ws.close(); ws = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
