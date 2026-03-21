@@ -1105,13 +1105,7 @@
             <span>Warm Pod ID (optional)</span>
             <input id="cfg-warm-pod-id" class="text-input" type="text" placeholder="62amwmbzwbod9q" />
           </label>
-          <label class="field-label">
-            <span>RunPod GPU Type</span>
-            <select id="cfg-runpod-gpu-type" class="text-input">
-              <option value="NVIDIA GeForce RTX 5090">RTX 5090</option>
-              <option value="NVIDIA GeForce RTX 4090">RTX 4090</option>
-            </select>
-          </label>
+          <!-- GPU type is now auto-selected by the backend (cheapest-first fallback) -->
           <button id="btn-attach-pod" class="ghost-btn">Attach Warm Pod</button>
           <button id="btn-save-config" class="ghost-btn">Save Connection Settings</button>
         </div>

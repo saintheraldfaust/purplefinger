@@ -40,7 +40,6 @@ const cfgApiToken     = document.getElementById('cfg-api-token');
 const cfgLicenseKey   = document.getElementById('cfg-license-key');
 const cfgObsPort      = document.getElementById('cfg-obs-port');
 const cfgWarmPodId    = document.getElementById('cfg-warm-pod-id');
-const cfgRunpodGpuType = document.getElementById('cfg-runpod-gpu-type');
 const cfgCamera       = document.getElementById('cfg-camera');
 const licenseStatus   = document.getElementById('license-status');
 const configNote      = document.getElementById('config-note');
@@ -146,7 +145,6 @@ function applyConfigToUI(config) {
   if (cfgLicenseKey) cfgLicenseKey.value = config.licenseKey || '';
   if (cfgObsPort) cfgObsPort.value = String(config.obsPort || 7891);
   if (cfgWarmPodId) cfgWarmPodId.value = config.warmPodId || '';
-  if (cfgRunpodGpuType) cfgRunpodGpuType.value = config.runpodGpuType || 'NVIDIA GeForce RTX 5090';
   if (obsUrlLabel) obsUrlLabel.textContent = config.obsUrl || `http://localhost:${config.obsPort || 7891}`;
   const pathHint = config.configPath ? `Saved locally at ${config.configPath}` : 'Saved locally on this machine.';
   setConfigNote(`${pathHint}\nAPI token is auto-filled when you login with your product key. Stop any active session before changing these values.`);
@@ -608,7 +606,6 @@ btnSaveConfig.addEventListener('click', async () => {
       licenseKey: cfgLicenseKey.value,
       obsPort: cfgObsPort.value,
       warmPodId: cfgWarmPodId.value,
-      runpodGpuType: cfgRunpodGpuType?.value,
     });
     applyConfigToUI(saved);
     setLog('Connection settings saved.');
@@ -640,7 +637,6 @@ btnAttachPod.addEventListener('click', async () => {
       licenseKey: cfgLicenseKey.value,
       obsPort: cfgObsPort.value,
       warmPodId: podId,
-      runpodGpuType: cfgRunpodGpuType?.value,
     });
     applyConfigToUI(saved);
     setCurrentPod(result.podId, result.endpoint);
@@ -671,7 +667,6 @@ btnLicenseLogin.addEventListener('click', async () => {
       licenseKey: key,
       obsPort: cfgObsPort.value,
       warmPodId: cfgWarmPodId.value,
-      runpodGpuType: cfgRunpodGpuType?.value,
     });
     applyConfigToUI(saved);
     setLog('Product key login successful.');
@@ -914,7 +909,7 @@ btnStart.addEventListener('click', async () => {
     }
 
     // /start now reuses a live warm pod when one already exists.
-    const data = await window.chimera.startSession(cfgRunpodGpuType?.value);
+    const data = await window.chimera.startSession();
     setCurrentPod(data.podId, data.endpoint);
 
     btnStart.style.display = 'none';
@@ -925,7 +920,7 @@ btnStart.addEventListener('click', async () => {
       setLog('Warm pod found. Checking server readiness...');
       updateLoaderText('Waking warm pod...', 'The inference server is booting up.');
     } else {
-      const gpuLabel = cfgRunpodGpuType?.value === 'NVIDIA GeForce RTX 4090' ? 'RTX 4090' : 'RTX 5090';
+      const gpuLabel = (data.gpuType || '').replace('NVIDIA ', '').replace('GeForce ', '') || 'GPU';
       setLog(`Warm pod not available. Waiting for a new ${gpuLabel} pod to finish booting...`);
       updateLoaderText('Booting inference server...', `New ${gpuLabel} pod is starting. Models are loading.`);
     }

@@ -40,22 +40,10 @@ function normalizePodId(value) {
   return String(value || '').trim();
 }
 
-function normalizeGpuType(value) {
-  const normalized = String(value || '').trim();
-  if (normalized === 'NVIDIA GeForce RTX 5090' || normalized === 'NVIDIA GeForce RTX 4090') {
-    return normalized;
-  }
-  return 'NVIDIA GeForce RTX 5090';
-}
-
 function formatBackendError(err, fallback = 'Request failed') {
   const responseError = err?.response?.data?.error;
   const status = err?.response?.status;
   const message = String(responseError || err?.message || fallback).trim();
-
-  if (/no longer any instances available/i.test(message)) {
-    return `RunPod has no capacity for ${appConfig.runpodGpuType} right now. Try the other GPU type or retry later.`;
-  }
 
   if (status && responseError) {
     return `${responseError}`;
@@ -70,7 +58,6 @@ let appConfig = {
   licenseKey: String(process.env.LICENSE_KEY || '').trim().toUpperCase(),
   obsPort: normalizePort(process.env.OBS_PORT, 7891),
   warmPodId: normalizePodId(process.env.WARM_POD_ID || ''),
-  runpodGpuType: normalizeGpuType(process.env.RUNPOD_GPU_TYPE || 'NVIDIA GeForce RTX 5090'),
 };
 
 let licenseSessionToken = '';
@@ -99,13 +86,12 @@ function validateConfig(nextConfig) {
   const licenseKey = String(nextConfig.licenseKey || '').trim().toUpperCase();
   const obsPort = normalizePort(nextConfig.obsPort, 7891);
   const warmPodId = normalizePodId(nextConfig.warmPodId || '');
-  const runpodGpuType = normalizeGpuType(nextConfig.runpodGpuType || appConfig.runpodGpuType);
 
   if (!backendUrl || !/^https?:\/\//i.test(backendUrl)) {
     throw new Error('Backend URL must start with http:// or https://');
   }
 
-  return { backendUrl, apiToken, licenseKey, obsPort, warmPodId, runpodGpuType };
+  return { backendUrl, apiToken, licenseKey, obsPort, warmPodId };
 }
 
 function writeConfigFile(nextConfig) {
@@ -117,7 +103,6 @@ function writeConfigFile(nextConfig) {
     `LICENSE_KEY=${nextConfig.licenseKey || ''}`,
     `OBS_PORT=${nextConfig.obsPort}`,
     `WARM_POD_ID=${nextConfig.warmPodId || ''}`,
-    `RUNPOD_GPU_TYPE=${nextConfig.runpodGpuType}`,
     '',
   ].join('\n');
   fs.writeFileSync(envPath, content, 'utf8');
@@ -272,13 +257,12 @@ ipcMain.handle('get-status', async () => {
   }
 });
 
-ipcMain.handle('start-session', async (_event, requestedGpuType) => {
+ipcMain.handle('start-session', async () => {
   ensureBackendConfig();
-  const gpuType = normalizeGpuType(requestedGpuType || appConfig.runpodGpuType);
   try {
     const res = await axios.post(
       `${appConfig.backendUrl}/start`,
-      { gpuType },
+      {},
       { headers: getAuthHeaders(), timeout: 30 * 60 * 1000 },
     );
     return res.data;
@@ -412,7 +396,6 @@ ipcMain.handle('get-app-config', async () => ({
   licenseKey: appConfig.licenseKey || '',
   obsPort: appConfig.obsPort,
   warmPodId: appConfig.warmPodId,
-  runpodGpuType: appConfig.runpodGpuType,
   configPath: resolveWritableEnvPath(),
   obsUrl: `http://localhost:${appConfig.obsPort}`,
 }));
@@ -438,7 +421,6 @@ ipcMain.handle('save-app-config', async (_event, nextConfig) => {
     licenseKey: appConfig.licenseKey || '',
     obsPort: appConfig.obsPort,
     warmPodId: appConfig.warmPodId,
-    runpodGpuType: appConfig.runpodGpuType,
     configPath: resolveWritableEnvPath(),
     obsUrl: `http://localhost:${appConfig.obsPort}`,
   };

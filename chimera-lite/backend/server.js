@@ -32,18 +32,10 @@ let uploadedFaceBuffer = null;
 let streamProfile = 'realtime';
 let stopInFlight = null;
 
-function normalizeGpuType(value) {
-  const normalized = String(value || '').trim();
-  if (config.RUNPOD_ALLOWED_GPU_TYPES.includes(normalized)) {
-    return normalized;
-  }
-  return config.RUNPOD_GPU_TYPE;
-}
-
-function formatStartError(err, gpuType) {
+function formatStartError(err) {
   const message = String(err?.message || 'Failed to start pod').trim();
-  if (/no longer any instances available/i.test(message)) {
-    return `RunPod has no capacity for ${gpuType} right now. Try the other GPU type or wait and retry.`;
+  if (/no longer any instances available|no gpu capacity/i.test(message)) {
+    return 'All GPU types are at capacity right now. Please wait a minute and retry.';
   }
   return message;
 }
@@ -274,8 +266,7 @@ app.post('/start', requireAccess, async (req, res) => {
       return res.json({ ok: true, reused: true, podId: existingSession.podId, endpoint: existingSession.endpoint });
     }
 
-    const gpuType = normalizeGpuType(req.body?.gpuType);
-    const pod = await startPod(gpuType);
+    const { pod, gpuType } = await startPod();
     const podId = pod.id;
 
     // Poll until the pod is running and we have a public port (~1-2 min)
@@ -292,7 +283,7 @@ app.post('/start', requireAccess, async (req, res) => {
 
   } catch (err) {
     console.error('Failed to start pod:', err.message);
-    res.status(500).json({ error: formatStartError(err, normalizeGpuType(req.body?.gpuType)) });
+    res.status(500).json({ error: formatStartError(err) });
   }
 });
 

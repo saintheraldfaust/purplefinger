@@ -8,26 +8,45 @@ const headers = () => ({
   Authorization: `Bearer ${config.RUNPOD_API_KEY}`,
 });
 
-async function startPod(gpuType = config.RUNPOD_GPU_TYPE) {
-  // First try with network volume (faster cold start — models already cached).
-  // If that fails (volume is region-locked, no GPUs in that region), retry without it.
-  if (config.RUNPOD_NETWORK_VOLUME_ID) {
+async function startPod() {
+  const chain = config.RUNPOD_GPU_FALLBACK_CHAIN;
+  if (!chain || chain.length === 0) {
+    throw new Error('No GPUs configured in RUNPOD_GPU_FALLBACK_CHAIN');
+  }
+
+  // --- Volume logic (commented out — region-locks GPU availability) ---
+  // if (config.RUNPOD_NETWORK_VOLUME_ID) {
+  //   try {
+  //     const pod = await _deployPod(chain[0], config.RUNPOD_NETWORK_VOLUME_ID);
+  //     console.log(`Pod started WITH network volume (${config.RUNPOD_NETWORK_VOLUME_ID})`);
+  //     return { pod, gpuType: chain[0] };
+  //   } catch (err) {
+  //     const msg = String(err?.message || '').toLowerCase();
+  //     const isCapacity = /no longer any instances|no available gpu|capacity|no gpu/i.test(msg);
+  //     if (!isCapacity) throw err;
+  //     console.log(`No GPUs available with volume — falling through to chain...`);
+  //   }
+  // }
+
+  // Walk the chain cheapest-first; skip capacity errors, throw real errors.
+  let lastErr = null;
+  for (const gpuType of chain) {
     try {
-      const pod = await _deployPod(gpuType, config.RUNPOD_NETWORK_VOLUME_ID);
-      console.log(`Pod started WITH network volume (${config.RUNPOD_NETWORK_VOLUME_ID})`);
-      return pod;
+      console.log(`Trying GPU: ${gpuType}...`);
+      const pod = await _deployPod(gpuType, null);
+      console.log(`Pod started on ${gpuType}`);
+      return { pod, gpuType };
     } catch (err) {
-      const msg = String(err?.message || '').toLowerCase();
+      const msg = String(err?.message || '');
       const isCapacity = /no longer any instances|no available gpu|capacity|no gpu/i.test(msg);
-      if (!isCapacity) throw err; // real error, don't retry
-      console.log(`No GPUs available with volume — retrying without volume...`);
+      if (!isCapacity) throw err; // real error — abort
+      console.log(`No capacity for ${gpuType}, trying next...`);
+      lastErr = err;
     }
   }
 
-  // Retry (or first attempt) without network volume
-  const pod = await _deployPod(gpuType, null);
-  console.log('Pod started WITHOUT network volume (models will download on boot)');
-  return pod;
+  // All GPUs exhausted
+  throw lastErr || new Error('No GPU capacity available on any configured type');
 }
 
 async function _deployPod(gpuType, networkVolumeId) {
