@@ -3,6 +3,11 @@ require('dotenv').config();
 module.exports = {
   PORT: process.env.PORT || 3000,
   API_TOKEN: process.env.API_TOKEN,
+  LICENSE_DB_FILE: process.env.LICENSE_DB_FILE || '.licenses.json',
+  ADMIN_USERNAME: process.env.ADMIN_USERNAME || 'admin',
+  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'change-me',
+  LICENSE_SESSION_TTL_MS: Number(process.env.LICENSE_SESSION_TTL_MS || 7 * 24 * 60 * 60 * 1000),
+  ADMIN_SESSION_TTL_MS: Number(process.env.ADMIN_SESSION_TTL_MS || 12 * 60 * 60 * 1000),
   RUNPOD_API_KEY: process.env.RUNPOD_API_KEY,
   RUNPOD_GPU_TYPE: process.env.RUNPOD_GPU_TYPE || 'NVIDIA GeForce RTX 4090',
   RUNPOD_ALLOWED_GPU_TYPES: ['NVIDIA GeForce RTX 5090', 'NVIDIA GeForce RTX 4090'],

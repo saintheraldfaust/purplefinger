@@ -67,27 +67,36 @@ function formatBackendError(err, fallback = 'Request failed') {
 let appConfig = {
   backendUrl: normalizeBaseUrl(process.env.BACKEND_URL || 'https://purplefinger-chimera.onrender.com'),
   apiToken: String(process.env.API_TOKEN || '').trim(),
+  licenseKey: String(process.env.LICENSE_KEY || '').trim().toUpperCase(),
   obsPort: normalizePort(process.env.OBS_PORT, 7891),
   warmPodId: normalizePodId(process.env.WARM_POD_ID || ''),
   runpodGpuType: normalizeGpuType(process.env.RUNPOD_GPU_TYPE || 'NVIDIA GeForce RTX 5090'),
 };
 
-function getHeaders() {
-  return { 'x-api-token': appConfig.apiToken };
+let licenseSessionToken = '';
+let licenseSessionUser = null;
+
+function getAuthHeaders() {
+  const headers = {};
+  if (appConfig.apiToken) {
+    headers['x-api-token'] = appConfig.apiToken;
+  }
+  if (licenseSessionToken) {
+    headers.authorization = `Bearer ${licenseSessionToken}`;
+  }
+  return headers;
 }
 
 function ensureBackendConfig() {
   if (!appConfig.backendUrl) {
     throw new Error('Missing BACKEND_URL. Add it to electron-client/.env or beside the EXE.');
   }
-  if (!appConfig.apiToken) {
-    throw new Error('Missing API_TOKEN. Add it to electron-client/.env or beside the EXE.');
-  }
 }
 
 function validateConfig(nextConfig) {
   const backendUrl = normalizeBaseUrl(nextConfig.backendUrl);
   const apiToken = String(nextConfig.apiToken || '').trim();
+  const licenseKey = String(nextConfig.licenseKey || '').trim().toUpperCase();
   const obsPort = normalizePort(nextConfig.obsPort, 7891);
   const warmPodId = normalizePodId(nextConfig.warmPodId || '');
   const runpodGpuType = normalizeGpuType(nextConfig.runpodGpuType || appConfig.runpodGpuType);
@@ -95,11 +104,8 @@ function validateConfig(nextConfig) {
   if (!backendUrl || !/^https?:\/\//i.test(backendUrl)) {
     throw new Error('Backend URL must start with http:// or https://');
   }
-  if (!apiToken) {
-    throw new Error('API token is required');
-  }
 
-  return { backendUrl, apiToken, obsPort, warmPodId, runpodGpuType };
+  return { backendUrl, apiToken, licenseKey, obsPort, warmPodId, runpodGpuType };
 }
 
 function writeConfigFile(nextConfig) {
@@ -108,6 +114,7 @@ function writeConfigFile(nextConfig) {
   const content = [
     `BACKEND_URL=${nextConfig.backendUrl}`,
     `API_TOKEN=${nextConfig.apiToken}`,
+    `LICENSE_KEY=${nextConfig.licenseKey || ''}`,
     `OBS_PORT=${nextConfig.obsPort}`,
     `WARM_POD_ID=${nextConfig.warmPodId || ''}`,
     `RUNPOD_GPU_TYPE=${nextConfig.runpodGpuType}`,
@@ -249,7 +256,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   // Auto-stop session when app closes
-  axios.post(`${appConfig.backendUrl}/stop`, {}, { headers: getHeaders() }).catch(() => {});
+  axios.post(`${appConfig.backendUrl}/stop`, {}, { headers: getAuthHeaders() }).catch(() => {});
   app.quit();
 });
 
@@ -258,7 +265,7 @@ app.on('window-all-closed', () => {
 ipcMain.handle('get-status', async () => {
   ensureBackendConfig();
   try {
-    const res = await axios.get(`${appConfig.backendUrl}/status`, { headers: getHeaders() });
+    const res = await axios.get(`${appConfig.backendUrl}/status`, { headers: getAuthHeaders() });
     return res.data;
   } catch (err) {
     throw new Error(formatBackendError(err, 'Failed to get status'));
@@ -272,7 +279,7 @@ ipcMain.handle('start-session', async (_event, requestedGpuType) => {
     const res = await axios.post(
       `${appConfig.backendUrl}/start`,
       { gpuType },
-      { headers: getHeaders(), timeout: 30 * 60 * 1000 },
+      { headers: getAuthHeaders(), timeout: 30 * 60 * 1000 },
     );
     return res.data;
   } catch (err) {
@@ -283,7 +290,7 @@ ipcMain.handle('start-session', async (_event, requestedGpuType) => {
 ipcMain.handle('check-ready', async () => {
   ensureBackendConfig();
   try {
-    const res = await axios.get(`${appConfig.backendUrl}/ready`, { headers: getHeaders(), timeout: 5000 });
+    const res = await axios.get(`${appConfig.backendUrl}/ready`, { headers: getAuthHeaders(), timeout: 5000 });
     return res.data;
   } catch (err) {
     throw new Error(formatBackendError(err, 'Failed to check readiness'));
@@ -293,7 +300,7 @@ ipcMain.handle('check-ready', async () => {
 ipcMain.handle('stop-session', async () => {
   ensureBackendConfig();
   try {
-    const res = await axios.post(`${appConfig.backendUrl}/stop`, {}, { headers: getHeaders(), timeout: 120000 });
+    const res = await axios.post(`${appConfig.backendUrl}/stop`, {}, { headers: getAuthHeaders(), timeout: 120000 });
     return res.data;
   } catch (err) {
     throw new Error(formatBackendError(err, 'Failed to stop session'));
@@ -302,13 +309,13 @@ ipcMain.handle('stop-session', async () => {
 
 ipcMain.handle('get-stream-profile', async () => {
   ensureBackendConfig();
-  const res = await axios.get(`${appConfig.backendUrl}/stream-profile`, { headers: getHeaders() });
+  const res = await axios.get(`${appConfig.backendUrl}/stream-profile`, { headers: getAuthHeaders() });
   return res.data;
 });
 
 ipcMain.handle('set-stream-profile', async (_event, profile) => {
   ensureBackendConfig();
-  const res = await axios.post(`${appConfig.backendUrl}/stream-profile`, { profile }, { headers: getHeaders() });
+  const res = await axios.post(`${appConfig.backendUrl}/stream-profile`, { profile }, { headers: getAuthHeaders() });
   return res.data;
 });
 
@@ -318,7 +325,78 @@ ipcMain.handle('upload-face', async (_event, buffer, filename) => {
   const form = new FormData();
   form.append('face', Buffer.from(buffer), { filename, contentType: 'image/jpeg' });
   const res = await axios.post(`${appConfig.backendUrl}/upload-face`, form, {
-    headers: { ...getHeaders(), ...form.getHeaders() },
+    headers: { ...getAuthHeaders(), ...form.getHeaders() },
+  });
+  return res.data;
+});
+
+ipcMain.handle('license-login', async (_event, inputProductKey) => {
+  ensureBackendConfig();
+  const productKey = String(inputProductKey || appConfig.licenseKey || '').trim().toUpperCase();
+  if (!productKey) {
+    throw new Error('Product key is required');
+  }
+
+  const res = await axios.post(`${appConfig.backendUrl}/auth/product-login`, { productKey }, {
+    headers: { 'Content-Type': 'application/json', ...(appConfig.apiToken ? { 'x-api-token': appConfig.apiToken } : {}) },
+    timeout: 10000,
+  });
+
+  licenseSessionToken = String(res.data?.token || '').trim();
+  licenseSessionUser = res.data?.user || null;
+  appConfig.licenseKey = productKey;
+  writeConfigFile(appConfig);
+
+  return {
+    ok: true,
+    user: licenseSessionUser,
+    productKey: appConfig.licenseKey,
+  };
+});
+
+ipcMain.handle('license-logout', async () => {
+  ensureBackendConfig();
+  if (licenseSessionToken) {
+    try {
+      await axios.post(`${appConfig.backendUrl}/auth/product-logout`, {}, {
+        headers: { authorization: `Bearer ${licenseSessionToken}` },
+        timeout: 5000,
+      });
+    } catch (_) {}
+  }
+  licenseSessionToken = '';
+  licenseSessionUser = null;
+  return { ok: true };
+});
+
+ipcMain.handle('get-license-session', async () => ({
+  loggedIn: !!licenseSessionToken,
+  productKey: appConfig.licenseKey || '',
+  user: licenseSessionUser,
+}));
+
+ipcMain.handle('get-user-notifications', async (_event, includeRead = false) => {
+  ensureBackendConfig();
+  if (!licenseSessionToken) {
+    throw new Error('Please log in with your product key first');
+  }
+  const res = await axios.get(`${appConfig.backendUrl}/me/notifications`, {
+    headers: { authorization: `Bearer ${licenseSessionToken}` },
+    params: { includeRead: !!includeRead, limit: 100 },
+  });
+  return res.data;
+});
+
+ipcMain.handle('mark-notification-read', async (_event, notificationId) => {
+  ensureBackendConfig();
+  if (!licenseSessionToken) {
+    throw new Error('Please log in with your product key first');
+  }
+  const id = String(notificationId || '').trim();
+  if (!id) throw new Error('notificationId is required');
+
+  const res = await axios.post(`${appConfig.backendUrl}/me/notifications/${id}/read`, {}, {
+    headers: { authorization: `Bearer ${licenseSessionToken}` },
   });
   return res.data;
 });
@@ -326,6 +404,7 @@ ipcMain.handle('upload-face', async (_event, buffer, filename) => {
 ipcMain.handle('get-app-config', async () => ({
   backendUrl: appConfig.backendUrl,
   apiToken: appConfig.apiToken,
+  licenseKey: appConfig.licenseKey || '',
   obsPort: appConfig.obsPort,
   warmPodId: appConfig.warmPodId,
   runpodGpuType: appConfig.runpodGpuType,
@@ -351,6 +430,7 @@ ipcMain.handle('save-app-config', async (_event, nextConfig) => {
   return {
     backendUrl: appConfig.backendUrl,
     apiToken: appConfig.apiToken,
+    licenseKey: appConfig.licenseKey || '',
     obsPort: appConfig.obsPort,
     warmPodId: appConfig.warmPodId,
     runpodGpuType: appConfig.runpodGpuType,
@@ -371,7 +451,7 @@ ipcMain.handle('attach-warm-pod', async (_event, podId) => {
     res = await axios.post(
       `${appConfig.backendUrl}/attach-pod`,
       { podId: normalizedPodId },
-      { headers: { ...getHeaders(), 'Content-Type': 'application/json' }, timeout: 30000 },
+      { headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' }, timeout: 30000 },
     );
   } catch (err) {
     throw new Error(formatBackendError(err, 'Failed to attach warm pod'));

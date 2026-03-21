@@ -286,6 +286,38 @@
       color: var(--muted);
     }
 
+    .notif-list {
+      display: grid;
+      gap: 8px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+
+    .notif-item {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(17, 24, 39, 0.65);
+      display: grid;
+      gap: 6px;
+    }
+
+    .notif-meta {
+      font-size: 0.72rem;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .notif-msg {
+      font-size: 0.82rem;
+      line-height: 1.35;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     #config-note {
       white-space: pre-wrap;
       word-break: break-word;
@@ -800,11 +832,37 @@
 
       <section class="panel">
         <div class="panel-title">Session Control</div>
+        <div class="panel-copy" id="license-status">Not logged in. Enter product key below.</div>
+        <label class="field-label">
+          <span>Product Key</span>
+          <input id="cfg-license-key" class="text-input" type="password" placeholder="12-character key" />
+        </label>
+        <div class="action-stack">
+          <button id="btn-license-login" class="ghost-btn">Login with Product Key</button>
+          <button id="btn-license-logout" class="ghost-btn">Logout Key Session</button>
+        </div>
+        <label class="field-label">
+          <span>Camera</span>
+          <select id="cfg-camera" class="text-input">
+            <option value="">Default Camera</option>
+          </select>
+        </label>
         <div class="action-stack">
           <button id="btn-start" class="primary-btn">Start Session</button>
           <button id="btn-stop" class="danger-btn">Stop Session</button>
         </div>
         <div class="panel-copy">Launch the GPU pod, connect the live feed, and mirror the final output into OBS.</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Notifications</div>
+        <div class="panel-copy">Messages from admin about subscription, billing, updates, or usage notices.</div>
+        <div class="action-stack">
+          <button id="btn-notifications-refresh" class="ghost-btn">Refresh Notifications</button>
+        </div>
+        <div id="notifications-list" class="notif-list">
+          <div class="panel-copy">No notifications yet.</div>
+        </div>
       </section>
 
       <section class="panel">
@@ -816,7 +874,7 @@
           </label>
           <label class="field-label">
             <span>API Token</span>
-            <input id="cfg-api-token" class="text-input" type="password" placeholder="Render API token" />
+            <input id="cfg-api-token" class="text-input" type="password" placeholder="Optional admin/service token" />
           </label>
           <label class="field-label">
             <span>OBS Port</span>

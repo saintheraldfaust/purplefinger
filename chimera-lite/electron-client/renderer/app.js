@@ -6,6 +6,9 @@ const btnAttachPod    = document.getElementById('btn-attach-pod');
 const btnResetPreview = document.getElementById('btn-reset-preview');
 const btnModeRealtime = document.getElementById('btn-mode-realtime');
 const btnModeQuality  = document.getElementById('btn-mode-quality');
+const btnLicenseLogin = document.getElementById('btn-license-login');
+const btnLicenseLogout = document.getElementById('btn-license-logout');
+const btnNotificationsRefresh = document.getElementById('btn-notifications-refresh');
 const btnOpenTutorial = document.getElementById('btn-open-tutorial');
 const btnCloseTutorial = document.getElementById('btn-close-tutorial');
 const btnOpenDrivers  = document.getElementById('btn-open-drivers');
@@ -24,9 +27,13 @@ const launchAscii     = document.getElementById('launch-ascii');
 const launchLoader    = document.getElementById('launch-loader');
 const cfgBackendUrl   = document.getElementById('cfg-backend-url');
 const cfgApiToken     = document.getElementById('cfg-api-token');
+const cfgLicenseKey   = document.getElementById('cfg-license-key');
 const cfgObsPort      = document.getElementById('cfg-obs-port');
 const cfgWarmPodId    = document.getElementById('cfg-warm-pod-id');
 const cfgRunpodGpuType = document.getElementById('cfg-runpod-gpu-type');
+const cfgCamera       = document.getElementById('cfg-camera');
+const licenseStatus   = document.getElementById('license-status');
+const notificationsList = document.getElementById('notifications-list');
 const configNote      = document.getElementById('config-note');
 const obsUrlLabel     = document.getElementById('obs-url');
 
@@ -85,12 +92,67 @@ function applyConfigToUI(config) {
   if (!config) return;
   if (cfgBackendUrl) cfgBackendUrl.value = config.backendUrl || '';
   if (cfgApiToken) cfgApiToken.value = config.apiToken || '';
+  if (cfgLicenseKey) cfgLicenseKey.value = config.licenseKey || '';
   if (cfgObsPort) cfgObsPort.value = String(config.obsPort || 7891);
   if (cfgWarmPodId) cfgWarmPodId.value = config.warmPodId || '';
   if (cfgRunpodGpuType) cfgRunpodGpuType.value = config.runpodGpuType || 'NVIDIA GeForce RTX 5090';
   if (obsUrlLabel) obsUrlLabel.textContent = config.obsUrl || `http://localhost:${config.obsPort || 7891}`;
   const pathHint = config.configPath ? `Saved locally at ${config.configPath}` : 'Saved locally on this machine.';
-  setConfigNote(`${pathHint}\nOptional warm pod ID lets the app reuse a specific live pod. GPU type controls what new RunPod machine type the backend requests. Stop any active session before changing these values.`);
+  setConfigNote(`${pathHint}\nProduct key is used for customer login each run. API token is optional for admin/service usage. Stop any active session before changing these values.`);
+}
+
+let licenseLoggedIn = false;
+let licenseUser = null;
+
+function setLicenseStatus(text) {
+  if (licenseStatus) licenseStatus.textContent = text;
+}
+
+function updateLicenseUI() {
+  if (licenseLoggedIn && licenseUser) {
+    const who = licenseUser.email ? `${licenseUser.name} (${licenseUser.email})` : licenseUser.name;
+    setLicenseStatus(`Logged in: ${who}`);
+  } else {
+    setLicenseStatus('Not logged in. Enter product key below.');
+  }
+}
+
+function renderNotifications(items) {
+  if (!notificationsList) return;
+  notificationsList.innerHTML = '';
+  if (!items || !items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'panel-copy';
+    empty.textContent = 'No notifications yet.';
+    notificationsList.appendChild(empty);
+    return;
+  }
+
+  items.forEach((item) => {
+    const el = document.createElement('div');
+    el.className = 'notif-item';
+    const createdAt = item.createdAt ? new Date(item.createdAt).toLocaleString() : '—';
+    el.innerHTML = `
+      <div class="notif-meta"><span>${item.category || 'info'}</span><span>${createdAt}</span></div>
+      <div class="notif-msg"></div>
+    `;
+    const msg = el.querySelector('.notif-msg');
+    if (msg) msg.textContent = item.message || '';
+    notificationsList.appendChild(el);
+  });
+}
+
+async function refreshNotifications() {
+  if (!licenseLoggedIn) {
+    renderNotifications([]);
+    return;
+  }
+  try {
+    const data = await window.chimera.getUserNotifications(false);
+    renderNotifications(data.notifications || []);
+  } catch (err) {
+    setLog(`Notification fetch failed: ${err.message}`);
+  }
 }
 
 function sleep(ms) {
@@ -414,6 +476,7 @@ btnSaveConfig.addEventListener('click', async () => {
     const saved = await window.chimera.saveAppConfig({
       backendUrl: cfgBackendUrl.value,
       apiToken: cfgApiToken.value,
+      licenseKey: cfgLicenseKey.value,
       obsPort: cfgObsPort.value,
       warmPodId: cfgWarmPodId.value,
       runpodGpuType: cfgRunpodGpuType?.value,
@@ -445,6 +508,7 @@ btnAttachPod.addEventListener('click', async () => {
     const saved = await window.chimera.saveAppConfig({
       backendUrl: cfgBackendUrl.value,
       apiToken: cfgApiToken.value,
+      licenseKey: cfgLicenseKey.value,
       obsPort: cfgObsPort.value,
       warmPodId: podId,
       runpodGpuType: cfgRunpodGpuType?.value,
@@ -459,6 +523,102 @@ btnAttachPod.addEventListener('click', async () => {
     btnAttachPod.disabled = false;
   }
 });
+
+btnLicenseLogin.addEventListener('click', async () => {
+  const key = String(cfgLicenseKey?.value || '').trim().toUpperCase();
+  if (!key) {
+    setLog('Enter your product key first.');
+    return;
+  }
+  btnLicenseLogin.disabled = true;
+  try {
+    const result = await window.chimera.licenseLogin(key);
+    licenseLoggedIn = true;
+    licenseUser = result.user || null;
+    updateLicenseUI();
+    const saved = await window.chimera.saveAppConfig({
+      backendUrl: cfgBackendUrl.value,
+      apiToken: cfgApiToken.value,
+      licenseKey: key,
+      obsPort: cfgObsPort.value,
+      warmPodId: cfgWarmPodId.value,
+      runpodGpuType: cfgRunpodGpuType?.value,
+    });
+    applyConfigToUI(saved);
+    setLog('Product key login successful.');
+    await refreshNotifications();
+  } catch (err) {
+    licenseLoggedIn = false;
+    licenseUser = null;
+    updateLicenseUI();
+    setLog(`Product key login failed: ${err.message}`);
+  } finally {
+    btnLicenseLogin.disabled = false;
+  }
+});
+
+btnLicenseLogout.addEventListener('click', async () => {
+  btnLicenseLogout.disabled = true;
+  try {
+    await window.chimera.licenseLogout();
+    licenseLoggedIn = false;
+    licenseUser = null;
+    updateLicenseUI();
+    renderNotifications([]);
+    setLog('Product key session logged out.');
+  } catch (err) {
+    setLog(`Logout failed: ${err.message}`);
+  } finally {
+    btnLicenseLogout.disabled = false;
+  }
+});
+
+btnNotificationsRefresh.addEventListener('click', () => {
+  refreshNotifications().catch(() => {});
+});
+
+// --- Camera enumeration ---
+// Virtual camera names to deprioritize (pushed to bottom of dropdown).
+const VIRTUAL_CAM_KEYWORDS = ['droidcam', 'obs virtual', 'obs-camera', 'virtual', 'snap camera', 'manycam', 'xsplit'];
+
+function isVirtualCam(label) {
+  const lower = (label || '').toLowerCase();
+  return VIRTUAL_CAM_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+async function enumerateCameras() {
+  try {
+    // Need a brief getUserMedia to get labelled devices on first load
+    const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    tempStream.getTracks().forEach(t => t.stop());
+  } catch (_) {}
+
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const cameras = devices.filter(d => d.kind === 'videoinput');
+
+  // Sort: real cameras first, virtual cameras last
+  cameras.sort((a, b) => {
+    const aVirt = isVirtualCam(a.label) ? 1 : 0;
+    const bVirt = isVirtualCam(b.label) ? 1 : 0;
+    return aVirt - bVirt;
+  });
+
+  // Populate dropdown
+  cfgCamera.innerHTML = '';
+  cameras.forEach((cam, idx) => {
+    const opt = document.createElement('option');
+    opt.value = cam.deviceId;
+    const label = cam.label || `Camera ${idx + 1}`;
+    opt.textContent = isVirtualCam(label) ? `⚠ ${label}` : label;
+    cfgCamera.appendChild(opt);
+  });
+
+  // Auto-select first non-virtual camera
+  const firstReal = cameras.find(c => !isVirtualCam(c.label));
+  if (firstReal) {
+    cfgCamera.value = firstReal.deviceId;
+  }
+}
 
 // --- WebSocket stream state ---
 let ws           = null;
@@ -475,12 +635,18 @@ async function startStreaming(ip, port) {
   gpuPort = port;
 
   setLog('Requesting camera...');
+  const videoConstraints = {
+    width:     { ideal: 960, max: 1280 },
+    height:    { ideal: 540, max: 720 },
+    frameRate: { ideal: 20, max: 20 },
+  };
+  // Use user-selected camera; fall back to default if none selected
+  const selectedDeviceId = cfgCamera?.value;
+  if (selectedDeviceId) {
+    videoConstraints.deviceId = { exact: selectedDeviceId };
+  }
   localStream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      width:     { ideal: 960, max: 1280 },
-      height:    { ideal: 540, max: 720 },
-      frameRate: { ideal: 20, max: 20 },
-    },
+    video: videoConstraints,
     audio: false,
   });
 
@@ -572,6 +738,12 @@ faceInput.addEventListener('change', async () => {
 
 // --- Start Session ---
 btnStart.addEventListener('click', async () => {
+  if (!licenseLoggedIn && !String(cfgApiToken?.value || '').trim()) {
+    setStatus('Locked', 'error');
+    setLog('Login with product key first (or configure API token for admin/service mode).');
+    return;
+  }
+
   setStatus('Starting...', 'loading');
   setLog('Checking for a reusable warm pod...');
   setLoading(true);
@@ -690,9 +862,18 @@ document.addEventListener('keydown', (e) => {
 (async () => {
   runLaunchSequence().catch(() => {});
   setPreviewDefaults();
+  await enumerateCameras().catch(() => {});
   try {
     const appConfig = await window.chimera.getAppConfig();
     applyConfigToUI(appConfig);
+
+    const licenseSession = await window.chimera.getLicenseSession();
+    licenseLoggedIn = !!licenseSession?.loggedIn;
+    licenseUser = licenseSession?.user || null;
+    updateLicenseUI();
+    if (licenseLoggedIn) {
+      await refreshNotifications();
+    }
 
     const profileData = await window.chimera.getStreamProfile();
     if (profileData?.profile) {

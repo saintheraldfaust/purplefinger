@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Purplefinger Admin</title>
+  <style>
+    body { font-family: Segoe UI, sans-serif; margin: 0; background: #0b1020; color: #dbeafe; }
+    .wrap { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+    .card { background: #121a2d; border: 1px solid #2b3a5f; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    h1,h2 { margin: 0 0 12px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+    input, textarea, select, button { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #dbeafe; }
+    textarea { min-height: 70px; resize: vertical; }
+    button { cursor: pointer; background: #2563eb; border-color: #2563eb; font-weight: 600; }
+    button.secondary { background: #1f2937; border-color: #334155; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border-bottom: 1px solid #273449; padding: 8px; text-align: left; vertical-align: top; }
+    .muted { color: #94a3b8; font-size: 12px; }
+    .ok { color: #86efac; }
+    .err { color: #fca5a5; }
+    .stack { display: grid; gap: 10px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Purplefinger Admin</h1>
+
+    <div class="card">
+      <h2>Admin Login</h2>
+      <div class="row">
+        <input id="admin-user" placeholder="Admin username" />
+        <input id="admin-pass" type="password" placeholder="Admin password" />
+      </div>
+      <div style="margin-top:10px;">
+        <button id="btn-login">Login</button>
+      </div>
+      <div id="login-status" class="muted" style="margin-top:8px;">Not logged in.</div>
+    </div>
+
+    <div class="card">
+      <h2>Create User</h2>
+      <div class="row-3">
+        <input id="new-name" placeholder="Name (required)" />
+        <input id="new-email" placeholder="Email (optional)" />
+        <input id="new-desc" placeholder="Description (optional)" />
+      </div>
+      <div style="margin-top:10px;">
+        <button id="btn-create-user">Create User + Product Key</button>
+      </div>
+      <div id="create-status" class="muted" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="card">
+      <h2>Send Notification</h2>
+      <div class="row-3">
+        <input id="ntf-user-id" placeholder="User ID (optional)" />
+        <input id="ntf-email" placeholder="Email (optional)" />
+        <input id="ntf-product-key" placeholder="Product Key (optional)" />
+      </div>
+      <div style="margin-top:10px;">
+        <textarea id="ntf-message" placeholder="Message"></textarea>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <select id="ntf-category">
+          <option value="info">info</option>
+          <option value="subscription">subscription</option>
+          <option value="billing">billing</option>
+          <option value="system">system</option>
+        </select>
+        <button id="btn-send-ntf">Send Notification</button>
+      </div>
+      <div id="ntf-status" class="muted" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="card stack">
+      <div style="display:flex; gap:10px;">
+        <button id="btn-refresh" class="secondary">Refresh Users</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Description</th>
+            <th>Product Key</th>
+            <th>Active</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="users-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let adminToken = '';
+
+    function setText(id, text, cls='muted') {
+      const el = document.getElementById(id);
+      el.className = cls;
+      el.textContent = text;
+    }
+
+    async function api(path, method='GET', body) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (adminToken) headers['x-admin-token'] = adminToken;
+      const res = await fetch(path, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
+    function renderUsers(users) {
+      const body = document.getElementById('users-body');
+      body.innerHTML = '';
+      users.forEach((u) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><input data-field="name" data-id="${u.id}" value="${(u.name || '').replace(/"/g, '&quot;')}" /></td>
+          <td><input data-field="email" data-id="${u.id}" value="${(u.email || '').replace(/"/g, '&quot;')}" /></td>
+          <td><input data-field="description" data-id="${u.id}" value="${(u.description || '').replace(/"/g, '&quot;')}" /></td>
+          <td><code>${u.productKey}</code></td>
+          <td><input type="checkbox" data-field="active" data-id="${u.id}" ${u.active ? 'checked' : ''} /></td>
+          <td>
+            <button data-action="save" data-id="${u.id}" class="secondary">Save</button>
+            <button data-action="regen" data-id="${u.id}" class="secondary">New Key</button>
+          </td>
+        `;
+        body.appendChild(tr);
+      });
+    }
+
+    async function refreshUsers() {
+      const data = await api('/admin/users');
+      renderUsers(data.users || []);
+    }
+
+    document.getElementById('btn-login').onclick = async () => {
+      try {
+        const username = document.getElementById('admin-user').value.trim();
+        const password = document.getElementById('admin-pass').value;
+        const data = await api('/admin/login', 'POST', { username, password });
+        adminToken = data.token;
+        setText('login-status', `Logged in as ${data.username}`, 'ok');
+        await refreshUsers();
+      } catch (err) {
+        setText('login-status', err.message, 'err');
+      }
+    };
+
+    document.getElementById('btn-create-user').onclick = async () => {
+      try {
+        const name = document.getElementById('new-name').value.trim();
+        const email = document.getElementById('new-email').value.trim();
+        const description = document.getElementById('new-desc').value.trim();
+        const data = await api('/admin/users', 'POST', { name, email, description });
+        setText('create-status', `Created ${data.user.name} · Key: ${data.user.productKey}`, 'ok');
+        await refreshUsers();
+      } catch (err) {
+        setText('create-status', err.message, 'err');
+      }
+    };
+
+    document.getElementById('btn-send-ntf').onclick = async () => {
+      try {
+        const userId = document.getElementById('ntf-user-id').value.trim();
+        const email = document.getElementById('ntf-email').value.trim();
+        const productKey = document.getElementById('ntf-product-key').value.trim();
+        const message = document.getElementById('ntf-message').value.trim();
+        const category = document.getElementById('ntf-category').value;
+        await api('/admin/notifications', 'POST', { userId, email, productKey, message, category });
+        setText('ntf-status', 'Notification sent.', 'ok');
+      } catch (err) {
+        setText('ntf-status', err.message, 'err');
+      }
+    };
+
+    document.getElementById('btn-refresh').onclick = () => refreshUsers().catch((err) => setText('create-status', err.message, 'err'));
+
+    document.getElementById('users-body').onclick = async (e) => {
+      const btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      const id = btn.getAttribute('data-id');
+      const action = btn.getAttribute('data-action');
+      try {
+        if (action === 'regen') {
+          await api(`/admin/users/${id}/regenerate-key`, 'POST');
+        } else if (action === 'save') {
+          const name = document.querySelector(`input[data-field="name"][data-id="${id}"]`).value.trim();
+          const email = document.querySelector(`input[data-field="email"][data-id="${id}"]`).value.trim();
+          const description = document.querySelector(`input[data-field="description"][data-id="${id}"]`).value.trim();
+          const active = document.querySelector(`input[data-field="active"][data-id="${id}"]`).checked;
+          await api(`/admin/users/${id}`, 'PATCH', { name, email, description, active });
+        }
+        await refreshUsers();
+      } catch (err) {
+        alert(err.message);
+      }
+    };
+  </script>
+</body>
+</html>
