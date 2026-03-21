@@ -2,7 +2,7 @@
 # Keep this list aligned with bootstrap import checks and inference imports.
 
 # Inference
-onnxruntime-gpu
+onnxruntime-gpu==1.17.1
 insightface
 
 # Face enhancement stack
