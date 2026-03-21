@@ -1,10 +1,9 @@
-FROM runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04
+FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:${LD_LIBRARY_PATH}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
@@ -15,8 +14,6 @@ WORKDIR /opt/chimera
 
 COPY docker/requirements.txt .
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    python3 -m pip uninstall -y onnxruntime onnxruntime-gpu 2>/dev/null; \
-    python3 -m pip install --no-cache-dir onnxruntime-gpu --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/ && \
     python3 -m pip install --no-cache-dir -r requirements.txt && \
     python3 - <<'PYEOF'
 import site, os
