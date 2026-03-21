@@ -73,7 +73,7 @@ const privacyShield   = document.getElementById('privacy-shield');
 const shieldTitle     = document.getElementById('shield-title');
 const shieldSub       = document.getElementById('shield-sub');
 const shieldScore     = document.getElementById('shield-score');
-const chkPrivacyShield = document.getElementById('chk-privacy-shield');
+const btnPrivacyShield = document.getElementById('btn-privacy-shield');
 const modeSummary     = document.getElementById('mode-summary');
 
 function setStatus(text, cls) {
@@ -795,8 +795,7 @@ const SHIELD_RELEASE_THRESHOLD = 50; // score at or above → release
 const SHIELD_MIN_SAMPLES = 3;        // need this many history entries
 
 function updatePrivacyShield(score) {
-  const enabled = chkPrivacyShield && chkPrivacyShield.checked;
-  if (!enabled) {
+  if (!_privacyShieldEnabled) {
     if (_shieldActive) hidePrivacyShield();
     return;
   }
@@ -894,6 +893,17 @@ btnResetPreview.addEventListener('click', () => setPreviewDefaults());
 btnModeRealtime.addEventListener('click', () => setProfile('realtime'));
 btnModeQuality.addEventListener('click', () => setProfile('quality'));
 btnReconnect.addEventListener('click', () => doReconnect());
+
+// --- Privacy Shield toggle (header button) ---
+let _privacyShieldEnabled = true;
+btnPrivacyShield.addEventListener('click', () => {
+  _privacyShieldEnabled = !_privacyShieldEnabled;
+  btnPrivacyShield.classList.toggle('shield-active', _privacyShieldEnabled);
+  btnPrivacyShield.title = _privacyShieldEnabled
+    ? 'Privacy Shield — auto-hide video on poor connection (ON)'
+    : 'Privacy Shield — auto-hide video on poor connection (OFF)';
+  if (!_privacyShieldEnabled) hidePrivacyShield();
+});
 btnSaveConfig.addEventListener('click', async () => {
   if (ws || localStream || gpuIp) {
     setConfigNote('Stop the current session before changing connection settings.');

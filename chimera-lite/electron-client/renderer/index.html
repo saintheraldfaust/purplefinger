@@ -304,6 +304,12 @@
     }
     .nav-icon-btn:hover { background: rgba(29, 78, 216, 0.22); transform: translateY(-1px); }
     .nav-icon-btn svg { width: 20px; height: 20px; fill: currentColor; }
+    .nav-icon-btn.shield-active {
+      color: #34d399;
+      border-color: rgba(52, 211, 153, 0.35);
+      background: rgba(6, 78, 59, 0.28);
+    }
+    .nav-icon-btn.shield-active:hover { background: rgba(6, 78, 59, 0.42); }
 
     .notif-badge {
       position: absolute;
@@ -1233,6 +1239,9 @@
       <div id="branding-sub">Developed by Saint Herald Faust (Ken)</div>
     </div>
     <div id="header-right">
+      <button id="btn-privacy-shield" class="nav-icon-btn shield-active" title="Privacy Shield — auto-hide video on poor connection (ON)">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+      </button>
       <button id="btn-notif-bell" class="nav-icon-btn" title="Notifications">
         <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C10.9 2 10 2.9 10 4C10 4.08 10.01 4.16 10.02 4.24C7.67 4.99 6 7.27 6 10V16L4 18V19H20V18L18 16V10C18 7.27 16.33 4.99 13.98 4.24C13.99 4.16 14 4.08 14 4C14 2.9 13.1 2 12 2ZM12 22C13.1 22 14 21.1 14 20H10C10 21.1 10.9 22 12 22Z"/></svg>
         <span id="notif-badge" class="notif-badge">0</span>
@@ -1315,13 +1324,6 @@
           </button>
         </div>
         <div class="panel-copy" id="mode-summary">Realtime mode targets a lower, steadier send rate and disables face enhancement on the GPU.</div>
-        <div class="toggle-row">
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-privacy-shield" checked />
-            <span class="toggle-track"></span>
-          </label>
-          <span>Privacy Shield — auto-hide video on poor connection</span>
-        </div>
       </section>
 
       <section class="panel">
