@@ -9,8 +9,30 @@ const headers = () => ({
 });
 
 async function startPod(gpuType = config.RUNPOD_GPU_TYPE) {
-  const networkVolumeField = config.RUNPOD_NETWORK_VOLUME_ID
-    ? `networkVolumeId: "${config.RUNPOD_NETWORK_VOLUME_ID}",`
+  // First try with network volume (faster cold start — models already cached).
+  // If that fails (volume is region-locked, no GPUs in that region), retry without it.
+  if (config.RUNPOD_NETWORK_VOLUME_ID) {
+    try {
+      const pod = await _deployPod(gpuType, config.RUNPOD_NETWORK_VOLUME_ID);
+      console.log(`Pod started WITH network volume (${config.RUNPOD_NETWORK_VOLUME_ID})`);
+      return pod;
+    } catch (err) {
+      const msg = String(err?.message || '').toLowerCase();
+      const isCapacity = /no longer any instances|no available gpu|capacity|no gpu/i.test(msg);
+      if (!isCapacity) throw err; // real error, don't retry
+      console.log(`No GPUs available with volume — retrying without volume...`);
+    }
+  }
+
+  // Retry (or first attempt) without network volume
+  const pod = await _deployPod(gpuType, null);
+  console.log('Pod started WITHOUT network volume (models will download on boot)');
+  return pod;
+}
+
+async function _deployPod(gpuType, networkVolumeId) {
+  const networkVolumeField = networkVolumeId
+    ? `networkVolumeId: "${networkVolumeId}",`
     : '';
 
   const mutation = `
