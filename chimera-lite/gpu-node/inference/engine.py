@@ -52,19 +52,29 @@ class SwapEngine:
 
         # TensorRT FP16 with engine caching — 2-3x faster than plain CUDA EP on RTX hardware.
         # First run compiles TRT engines (~60-120s); subsequent runs load from cache instantly.
-        # Falls back to CUDAExecutionProvider automatically if TRT is unavailable.
-        os.makedirs('/workspace/models/trt_cache', exist_ok=True)
-        _gpu_providers = [
-            ('TensorrtExecutionProvider', {
+        # Only request TRT if libnvinfer is actually loadable — otherwise onnxruntime's
+        # failed TRT init can cascade and break CUDA EP too, falling all the way to CPU.
+        _trt_available = False
+        try:
+            import ctypes
+            ctypes.CDLL('libnvinfer.so', ctypes.RTLD_GLOBAL)
+            _trt_available = True
+            log.info('TensorRT libraries found — enabling TRT EP')
+        except OSError:
+            log.info('TensorRT libraries not found — using CUDA EP only (this is fine)')
+
+        _gpu_providers = []
+        if _trt_available:
+            os.makedirs('/workspace/models/trt_cache', exist_ok=True)
+            _gpu_providers.append(('TensorrtExecutionProvider', {
                 'trt_fp16_enable': True,
                 'trt_max_workspace_size': 1 << 30,  # 1 GB
                 'trt_engine_cache_enable': True,
                 'trt_engine_cache_path': '/workspace/models/trt_cache',
                 'trt_timing_cache_enable': True,
-            }),
-            'CUDAExecutionProvider',
-            'CPUExecutionProvider',
-        ]
+            }))
+        _gpu_providers.append('CUDAExecutionProvider')
+        _gpu_providers.append('CPUExecutionProvider')
 
         self.source_app = FaceAnalysis(
             name='buffalo_l',
