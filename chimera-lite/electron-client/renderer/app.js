@@ -56,10 +56,19 @@ const stSendFps       = document.getElementById('st-send-fps');
 const stRecvFps       = document.getElementById('st-recv-fps');
 const stLatency       = document.getElementById('st-latency');
 const stMode          = document.getElementById('st-mode');
+const stConnScore     = document.getElementById('st-conn-score');
 const ovSendFps       = document.getElementById('ov-send-fps');
 const ovRecvFps       = document.getElementById('ov-recv-fps');
 const ovLatency       = document.getElementById('ov-latency');
 const ovMode          = document.getElementById('ov-mode');
+const connScorePill   = document.getElementById('conn-score-pill');
+const scoreRingFg     = document.getElementById('score-ring-fg');
+const scorePct        = document.getElementById('score-pct');
+const connGrade       = document.getElementById('conn-grade');
+const connHint        = document.getElementById('conn-hint');
+const reconnectBanner = document.getElementById('reconnect-banner');
+const reconnectMsg    = document.getElementById('reconnect-msg');
+const btnReconnect    = document.getElementById('btn-reconnect');
 const modeSummary     = document.getElementById('mode-summary');
 
 function setStatus(text, cls) {
@@ -198,7 +207,43 @@ function playNotifSound() {
   } catch (_) {}
 }
 
-let _cachedNotifications = [];
+// --- Session beep sounds (Web Audio API) ---
+let _beepInterval = null;
+
+function _ensureAudioCtx() {
+  if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return _audioCtx;
+}
+
+function playBeep(freq = 660, duration = 0.12, volume = 0.15) {
+  try {
+    const ctx = _ensureAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(volume, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + duration);
+  } catch (_) {}
+}
+
+function playDoubleBeep() {
+  playBeep(880, 0.1, 0.15);
+  setTimeout(() => playBeep(880, 0.1, 0.15), 160);
+}
+
+function startBeeping() {
+  stopBeeping();
+  playBeep(520, 0.08, 0.10);
+  _beepInterval = setInterval(() => playBeep(520, 0.08, 0.10), 800);
+}
+
+function stopBeeping() {
+  if (_beepInterval) { clearInterval(_beepInterval); _beepInterval = null; }
+}
 let _unreadCount = 0;
 
 function updateNotifBadge(count) {
@@ -531,6 +576,10 @@ async function setProfile(profile, pushToBackend = true) {
 function startStats() {
   if (statsTimer) clearInterval(statsTimer);
   resetStats();
+  showConnScore();
+  _connHistory = [];
+  _stallCount = 0;
+  hideReconnectBanner();
   statsTimer = setInterval(() => {
     const sendFps = sentFrames - lastSentFrames;
     const recvFps = recvFrames - lastRecvFrames;
@@ -547,6 +596,9 @@ function startStats() {
     ovRecvFps.textContent = `${recvFps} fps`;
     ovLatency.textContent = latency ? `${latency} ms` : '—';
 
+    // --- Connectivity score ---
+    updateConnScore(sendFps, recvFps, latency);
+
     if (recvFps > 0) {
       const profile = STREAM_PROFILES[currentProfile];
       const recommendedFps = Math.max(
@@ -560,6 +612,146 @@ function startStats() {
       }
     }
   }, 1000);
+}
+
+// --- Connectivity Score Engine ---
+const CONN_RING_CIRCUMFERENCE = 97.4; // 2 * π * 15.5
+let _connHistory = [];      // last N snapshots: { score }
+let _stallCount = 0;        // consecutive seconds with 0 recv
+const CONN_HISTORY_LEN = 8; // smoothing window (seconds)
+
+function computeConnScore(sendFps, recvFps, latencyMs) {
+  const profile = STREAM_PROFILES[currentProfile];
+  const targetFps = profile.sendFps;
+
+  // Component 1: Throughput ratio (0-40 pts)
+  // How many frames come back vs what we send
+  const ratio = sendFps > 0 ? Math.min(recvFps / sendFps, 1) : (recvFps > 0 ? 1 : 0);
+  const throughputScore = ratio * 40;
+
+  // Component 2: Recv FPS vs target (0-30 pts)
+  // Penalise if recv is well below what the mode expects
+  const fpsScore = Math.min(recvFps / Math.max(targetFps * 0.6, 1), 1) * 30;
+
+  // Component 3: Latency (0-20 pts)
+  // <80ms = perfect, >500ms = 0
+  let latScore = 20;
+  if (latencyMs > 500) latScore = 0;
+  else if (latencyMs > 300) latScore = 5;
+  else if (latencyMs > 200) latScore = 10;
+  else if (latencyMs > 120) latScore = 15;
+  else if (latencyMs > 80) latScore = 18;
+
+  // Component 4: Stall penalty (0-10 pts)
+  // Consecutive zero-recv seconds
+  const stallScore = Math.max(0, 10 - _stallCount * 5);
+
+  return Math.round(Math.min(100, throughputScore + fpsScore + latScore + stallScore));
+}
+
+function getGrade(score) {
+  if (score >= 80) return { label: 'Excellent', cls: 'excellent', hint: '' };
+  if (score >= 60) return { label: 'Good', cls: 'good', hint: 'Stable connection' };
+  if (score >= 35) return { label: 'Fair', cls: 'fair', hint: 'Try Realtime mode or check upload speed' };
+  return { label: 'Poor', cls: 'poor', hint: 'High packet loss — consider reconnecting' };
+}
+
+function updateConnScore(sendFps, recvFps, latencyMs) {
+  // Track stalls
+  if (recvFps === 0 && sendFps > 0) {
+    _stallCount++;
+  } else {
+    _stallCount = Math.max(0, _stallCount - 1);
+  }
+
+  const raw = computeConnScore(sendFps, recvFps, latencyMs);
+  _connHistory.push(raw);
+  if (_connHistory.length > CONN_HISTORY_LEN) _connHistory.shift();
+
+  // Smoothed average
+  const avg = Math.round(_connHistory.reduce((a, b) => a + b, 0) / _connHistory.length);
+
+  // Update ring
+  const offset = CONN_RING_CIRCUMFERENCE - (CONN_RING_CIRCUMFERENCE * avg / 100);
+  if (scoreRingFg) {
+    scoreRingFg.style.strokeDashoffset = offset;
+    const grade = getGrade(avg);
+    scoreRingFg.style.stroke = avg >= 80 ? '#34d399' : avg >= 60 ? '#60a5fa' : avg >= 35 ? '#fbbf24' : '#f87171';
+    scorePct.textContent = `${avg}`;
+    connGrade.textContent = grade.label;
+    connGrade.className = `conn-grade ${grade.cls}`;
+    connHint.textContent = grade.hint;
+  }
+
+  // Update sidebar stat
+  if (stConnScore) {
+    const grade = getGrade(avg);
+    stConnScore.textContent = `${avg}% ${grade.label}`;
+  }
+
+  // Show reconnect banner if score critically low for sustained period
+  if (avg <= 20 && _connHistory.length >= 4) {
+    showReconnectBanner('Feed stalled — connection degraded');
+  } else if (_stallCount >= 5) {
+    showReconnectBanner('No frames received — stream may be frozen');
+  } else {
+    hideReconnectBanner();
+  }
+}
+
+function showConnScore() {
+  if (connScorePill) connScorePill.classList.add('visible');
+}
+
+function hideConnScore() {
+  if (connScorePill) connScorePill.classList.remove('visible');
+  if (scoreRingFg) scoreRingFg.style.strokeDashoffset = CONN_RING_CIRCUMFERENCE;
+  if (scorePct) scorePct.textContent = '—';
+  if (connGrade) { connGrade.textContent = '—'; connGrade.className = 'conn-grade'; }
+  if (connHint) connHint.textContent = '';
+  if (stConnScore) stConnScore.textContent = '—';
+}
+
+function showReconnectBanner(msg) {
+  if (reconnectMsg) reconnectMsg.textContent = msg;
+  if (reconnectBanner) reconnectBanner.classList.add('visible');
+}
+
+function hideReconnectBanner() {
+  if (reconnectBanner) reconnectBanner.classList.remove('visible');
+}
+
+async function doReconnect() {
+  if (!gpuIp || !gpuPort) return;
+  const ip = gpuIp;
+  const port = gpuPort;
+
+  hideReconnectBanner();
+  setLog('Reconnecting stream...');
+  setStatus('Reconnecting...', 'loading');
+
+  // Tear down current WS + camera without clearing gpuIp (we'll reuse it)
+  _captureLoopActive = false;
+  stopStats();
+  if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+  if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  if (captureVideo) { captureVideo.srcObject = null; captureVideo = null; }
+  localVideo.srcObject = null;
+  offscreen = null;
+  offCtx = null;
+  gpuIp = null;
+  gpuPort = null;
+
+  // Small pause to let the WS fully close
+  await new Promise(r => setTimeout(r, 500));
+
+  try {
+    await startStreaming(ip, port);
+    setStatus('Active', 'active');
+  } catch (err) {
+    setStatus('Error', 'error');
+    setLog('Reconnect failed: ' + err.message);
+  }
 }
 
 function stopStats() {
@@ -591,6 +783,7 @@ ctrlSaturation.addEventListener('input', (e) => {
 btnResetPreview.addEventListener('click', () => setPreviewDefaults());
 btnModeRealtime.addEventListener('click', () => setProfile('realtime'));
 btnModeQuality.addEventListener('click', () => setProfile('quality'));
+btnReconnect.addEventListener('click', () => doReconnect());
 btnSaveConfig.addEventListener('click', async () => {
   if (ws || localStream || gpuIp) {
     setConfigNote('Stop the current session before changing connection settings.');
@@ -777,6 +970,7 @@ async function startStreaming(ip, port) {
   gpuPort = port;
 
   setLog('Requesting camera...');
+  startBeeping(); // beep while waiting for camera + stream connection
   const videoConstraints = {
     width:     { ideal: 960, max: 1280 },
     height:    { ideal: 540, max: 720 },
@@ -814,6 +1008,7 @@ async function startStreaming(ip, port) {
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
+    stopBeeping();
     hideVideoEmpty();
     setLog(`Streaming — ${ip}:${port}`);
     startStats();
@@ -842,6 +1037,8 @@ function stopStreaming() {
   gpuIp = null;
   _captureLoopActive = false;
   stopStats();
+  hideConnScore();
+  hideReconnectBanner();
 
   if (ws) { ws.close(); ws = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
@@ -890,6 +1087,7 @@ btnStart.addEventListener('click', async () => {
   setLog('Checking for a reusable warm pod...');
   setLoading(true);
   showLoadingState('Starting session...', 'Looking for a reusable warm pod...');
+  playBeep(660, 0.15, 0.18); // single beep — session starting
 
   try {
     const configuredWarmPodId = String(cfgWarmPodId?.value || '').trim();
@@ -950,6 +1148,7 @@ btnStart.addEventListener('click', async () => {
 
     await startStreaming(data.endpoint.ip, data.endpoint.port);
   } catch (err) {
+    stopBeeping();
     setStatus('Error', 'error');
     setLog('Failed to start: ' + err.message);
     showIdleState();
@@ -962,6 +1161,7 @@ btnStop.addEventListener('click', async () => {
   setStatus('Stopping...', 'loading');
   setLog('Terminating GPU pod...');
   setLoading(true);
+  stopBeeping();
 
   stopStreaming();
 
@@ -970,6 +1170,7 @@ btnStop.addEventListener('click', async () => {
     setCurrentPod(null);
     setStatus('Idle', '');
     setLog('Session stopped.');
+    playDoubleBeep(); // two beeps — session ended
     btnStop.style.display  = 'none';
     btnStart.style.display = 'block';
   } catch (err) {

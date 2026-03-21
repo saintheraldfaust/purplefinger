@@ -673,6 +673,86 @@
       font-weight: 700;
     }
 
+    /* Connectivity score — top-right of video area */
+    #conn-score-pill {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      background: rgba(2, 6, 23, 0.78);
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      backdrop-filter: blur(10px);
+      color: #dbeafe;
+      border-radius: 999px;
+      padding: 6px 14px 6px 8px;
+      font-size: 0.76rem;
+      font-weight: 700;
+      pointer-events: none;
+      z-index: 3;
+    }
+    #conn-score-pill.visible { display: flex; }
+
+    .score-ring {
+      width: 30px; height: 30px;
+      position: relative;
+    }
+    .score-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+    .score-ring-bg { fill: none; stroke: rgba(148,163,184,0.18); stroke-width: 3; }
+    .score-ring-fg { fill: none; stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 0.6s ease, stroke 0.4s ease; }
+    .score-ring-label {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.58rem; font-weight: 800; color: #f8fafc;
+    }
+
+    .conn-grade { font-weight: 800; font-size: 0.82rem; }
+    .conn-grade.excellent { color: #34d399; }
+    .conn-grade.good      { color: #60a5fa; }
+    .conn-grade.fair      { color: #fbbf24; }
+    .conn-grade.poor      { color: #f87171; }
+
+    .conn-hint {
+      font-size: 0.64rem;
+      font-weight: 500;
+      color: #94a3b8;
+      max-width: 120px;
+      line-height: 1.2;
+    }
+
+    /* Reconnect banner */
+    #reconnect-banner {
+      display: none;
+      position: absolute;
+      bottom: 80px;
+      left: 50%; transform: translateX(-50%);
+      background: rgba(239, 68, 68, 0.88);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(248,113,113,0.4);
+      border-radius: 14px;
+      padding: 10px 18px;
+      z-index: 10;
+      align-items: center;
+      gap: 12px;
+      pointer-events: auto;
+      animation: banner-in 0.3s ease;
+    }
+    #reconnect-banner.visible { display: flex; }
+    @keyframes banner-in { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+    #reconnect-banner .banner-text {
+      color: #fff; font-size: 0.78rem; font-weight: 600;
+    }
+    #btn-reconnect {
+      background: #fff; color: #dc2626;
+      border: none; border-radius: 8px;
+      padding: 6px 14px;
+      font-size: 0.74rem; font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #btn-reconnect:hover { background: #fef2f2; }
+
     #footer {
       display: flex;
       align-items: center;
@@ -1155,6 +1235,7 @@
           <div class="stat-box"><div class="stat-label">Recv FPS</div><div class="stat-val" id="st-recv-fps">—</div></div>
           <div class="stat-box"><div class="stat-label">Latency</div><div class="stat-val" id="st-latency">—</div></div>
           <div class="stat-box"><div class="stat-label">Mode / Cap</div><div class="stat-val" id="st-mode">—</div></div>
+          <div class="stat-box"><div class="stat-label">Connection</div><div class="stat-val" id="st-conn-score">—</div></div>
         </div>
       </section>
 
@@ -1190,6 +1271,28 @@
           <div class="hud-pill">Send <span id="ov-send-fps">—</span></div>
           <div class="hud-pill">Recv <span id="ov-recv-fps">—</span></div>
           <div class="hud-pill">Latency <span id="ov-latency">—</span></div>
+        </div>
+
+        <!-- Connectivity Score (top-right) -->
+        <div id="conn-score-pill">
+          <div class="score-ring">
+            <svg viewBox="0 0 36 36">
+              <circle class="score-ring-bg" cx="18" cy="18" r="15.5" />
+              <circle class="score-ring-fg" id="score-ring-fg" cx="18" cy="18" r="15.5"
+                      stroke-dasharray="97.4" stroke-dashoffset="97.4" />
+            </svg>
+            <div class="score-ring-label" id="score-pct">—</div>
+          </div>
+          <div>
+            <div class="conn-grade" id="conn-grade">—</div>
+            <div class="conn-hint" id="conn-hint"></div>
+          </div>
+        </div>
+
+        <!-- Reconnect banner (shown when feed clogs) -->
+        <div id="reconnect-banner">
+          <span class="banner-text" id="reconnect-msg">Feed stalled — connection degraded</span>
+          <button id="btn-reconnect">⟳ Reconnect</button>
         </div>
         <!-- Camera PiP placeholder (shown when camera not active) -->
         <div id="cam-placeholder">
