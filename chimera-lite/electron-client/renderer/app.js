@@ -108,12 +108,24 @@ function setLicenseStatus(text) {
   if (licenseStatus) licenseStatus.textContent = text;
 }
 
+function isSessionUnlocked() {
+  return licenseLoggedIn || !!String(cfgApiToken?.value || '').trim();
+}
+
 function updateLicenseUI() {
+  const unlocked = isSessionUnlocked();
+  btnStart.disabled = !unlocked;
+  btnUpload.disabled = !unlocked;
+  btnLicenseLogin.style.display = licenseLoggedIn ? 'none' : 'block';
+  btnLicenseLogout.style.display = licenseLoggedIn ? 'block' : 'none';
+
   if (licenseLoggedIn && licenseUser) {
     const who = licenseUser.email ? `${licenseUser.name} (${licenseUser.email})` : licenseUser.name;
-    setLicenseStatus(`Logged in: ${who}`);
+    setLicenseStatus(`✅ Logged in: ${who}`);
+  } else if (unlocked) {
+    setLicenseStatus('Using API token (admin mode).');
   } else {
-    setLicenseStatus('Not logged in. Enter product key below.');
+    setLicenseStatus('⛔ Not logged in. Enter product key to unlock.');
   }
 }
 
@@ -738,9 +750,8 @@ faceInput.addEventListener('change', async () => {
 
 // --- Start Session ---
 btnStart.addEventListener('click', async () => {
-  if (!licenseLoggedIn && !String(cfgApiToken?.value || '').trim()) {
-    setStatus('Locked', 'error');
-    setLog('Login with product key first (or configure API token for admin/service mode).');
+  if (!isSessionUnlocked()) {
+    setLog('Login with product key first.');
     return;
   }
 

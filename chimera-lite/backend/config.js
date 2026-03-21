@@ -3,7 +3,7 @@ require('dotenv').config();
 module.exports = {
   PORT: process.env.PORT || 3000,
   API_TOKEN: process.env.API_TOKEN,
-  LICENSE_DB_FILE: process.env.LICENSE_DB_FILE || '.licenses.json',
+  MONGODB_URI: process.env.MONGODB_URI,
   ADMIN_USERNAME: process.env.ADMIN_USERNAME || 'admin',
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'change-me',
   LICENSE_SESSION_TTL_MS: Number(process.env.LICENSE_SESSION_TTL_MS || 7 * 24 * 60 * 60 * 1000),

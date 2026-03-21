@@ -120,16 +120,17 @@
       const body = document.getElementById('users-body');
       body.innerHTML = '';
       users.forEach((u) => {
+        const uid = u._id || u.id;
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td><input data-field="name" data-id="${u.id}" value="${(u.name || '').replace(/"/g, '&quot;')}" /></td>
-          <td><input data-field="email" data-id="${u.id}" value="${(u.email || '').replace(/"/g, '&quot;')}" /></td>
-          <td><input data-field="description" data-id="${u.id}" value="${(u.description || '').replace(/"/g, '&quot;')}" /></td>
+          <td><input data-field="name" data-id="${uid}" value="${(u.name || '').replace(/"/g, '&quot;')}" /></td>
+          <td><input data-field="email" data-id="${uid}" value="${(u.email || '').replace(/"/g, '&quot;')}" /></td>
+          <td><input data-field="description" data-id="${uid}" value="${(u.description || '').replace(/"/g, '&quot;')}" /></td>
           <td><code>${u.productKey}</code></td>
-          <td><input type="checkbox" data-field="active" data-id="${u.id}" ${u.active ? 'checked' : ''} /></td>
+          <td><input type="checkbox" data-field="active" data-id="${uid}" ${u.active ? 'checked' : ''} /></td>
           <td>
-            <button data-action="save" data-id="${u.id}" class="secondary">Save</button>
-            <button data-action="regen" data-id="${u.id}" class="secondary">New Key</button>
+            <button data-action="save" data-id="${uid}" class="secondary">Save</button>
+            <button data-action="regen" data-id="${uid}" class="secondary">New Key</button>
           </td>
         `;
         body.appendChild(tr);

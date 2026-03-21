@@ -5,6 +5,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
+const mongoose = require('mongoose');
 const config = require('./config');
 const { LicenseStore } = require('./licenseStore');
 const { startPod, stopPod, getPodStatus, extractEndpoint } = require('./gpuProvider');
@@ -16,7 +17,6 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 const sessionStatePath = path.resolve(process.cwd(), config.SESSION_STATE_FILE);
 const licenseStore = new LicenseStore({
-  dbPath: config.LICENSE_DB_FILE,
   adminUsername: config.ADMIN_USERNAME,
   adminPassword: config.ADMIN_PASSWORD,
   userSessionTtlMs: config.LICENSE_SESSION_TTL_MS,
@@ -67,13 +67,13 @@ function isValidApiToken(req) {
 }
 
 // --- Auth Middleware ---
-function requireAccess(req, res, next) {
+async function requireAccess(req, res, next) {
   if (isValidApiToken(req)) {
     req.auth = { type: 'api-token' };
     return next();
   }
 
-  const user = licenseStore.getUserBySessionToken(getBearerToken(req));
+  const user = await licenseStore.getUserBySessionToken(getBearerToken(req));
   if (user) {
     req.auth = { type: 'license', user };
     return next();
@@ -82,8 +82,8 @@ function requireAccess(req, res, next) {
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
-function requireLicensedUser(req, res, next) {
-  const user = licenseStore.getUserBySessionToken(getBearerToken(req));
+async function requireLicensedUser(req, res, next) {
+  const user = await licenseStore.getUserBySessionToken(getBearerToken(req));
   if (!user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -115,19 +115,19 @@ app.get('/admin', (_req, res) => {
   res.sendFile(path.join(adminUiDir, 'admin.html'));
 });
 
-app.post('/auth/product-login', (req, res) => {
+app.post('/auth/product-login', async (req, res) => {
   const productKey = String(req.body?.productKey || '').trim().toUpperCase();
   if (!productKey) {
     return res.status(400).json({ error: 'productKey is required' });
   }
   try {
-    const session = licenseStore.createUserSession(productKey);
+    const session = await licenseStore.createUserSession(productKey);
     res.json({
       ok: true,
       token: session.token,
       expiresInSec: session.expiresInSec,
       user: {
-        id: session.user.id,
+        id: session.user._id,
         name: session.user.name,
         email: session.user.email,
         productKey: session.user.productKey,
@@ -147,7 +147,7 @@ app.post('/auth/product-logout', requireLicensedUser, (req, res) => {
 app.get('/me', requireLicensedUser, (req, res) => {
   const user = req.licenseUser;
   res.json({
-    id: user.id,
+    id: user._id,
     name: user.name,
     email: user.email,
     description: user.description,
@@ -156,16 +156,16 @@ app.get('/me', requireLicensedUser, (req, res) => {
   });
 });
 
-app.get('/me/notifications', requireLicensedUser, (req, res) => {
+app.get('/me/notifications', requireLicensedUser, async (req, res) => {
   const includeRead = String(req.query.includeRead || '').toLowerCase() === 'true';
   const limit = Number(req.query.limit || 100);
-  const items = licenseStore.listNotificationsForUser(req.licenseUser.id, { includeRead, limit });
+  const items = await licenseStore.listNotificationsForUser(req.licenseUser._id, { includeRead, limit });
   res.json({ ok: true, notifications: items });
 });
 
-app.post('/me/notifications/:id/read', requireLicensedUser, (req, res) => {
+app.post('/me/notifications/:id/read', requireLicensedUser, async (req, res) => {
   try {
-    const item = licenseStore.markNotificationRead(req.licenseUser.id, String(req.params.id || ''));
+    const item = await licenseStore.markNotificationRead(req.licenseUser._id, String(req.params.id || ''));
     res.json({ ok: true, notification: item });
   } catch (err) {
     res.status(404).json({ error: err.message });
@@ -183,29 +183,29 @@ app.post('/admin/login', (req, res) => {
   }
 });
 
-app.get('/admin/users', requireAdmin, (_req, res) => {
-  const users = licenseStore.listUsers();
+app.get('/admin/users', requireAdmin, async (_req, res) => {
+  const users = await licenseStore.listUsers();
   res.json({ ok: true, users });
 });
 
-app.post('/admin/users', requireAdmin, (req, res) => {
+app.post('/admin/users', requireAdmin, async (req, res) => {
   const payload = {
     name: req.body?.name,
     email: req.body?.email,
     description: req.body?.description,
   };
   try {
-    const user = licenseStore.createUser(payload);
+    const user = await licenseStore.createUser(payload);
     res.status(201).json({ ok: true, user });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.patch('/admin/users/:id', requireAdmin, (req, res) => {
+app.patch('/admin/users/:id', requireAdmin, async (req, res) => {
   const userId = String(req.params.id || '').trim();
   try {
-    const user = licenseStore.updateUser(userId, {
+    const user = await licenseStore.updateUser(userId, {
       name: req.body?.name,
       email: req.body?.email,
       description: req.body?.description,
@@ -217,17 +217,17 @@ app.patch('/admin/users/:id', requireAdmin, (req, res) => {
   }
 });
 
-app.post('/admin/users/:id/regenerate-key', requireAdmin, (req, res) => {
+app.post('/admin/users/:id/regenerate-key', requireAdmin, async (req, res) => {
   const userId = String(req.params.id || '').trim();
   try {
-    const user = licenseStore.regenerateProductKey(userId);
+    const user = await licenseStore.regenerateProductKey(userId);
     res.json({ ok: true, user });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.post('/admin/notifications', requireAdmin, (req, res) => {
+app.post('/admin/notifications', requireAdmin, async (req, res) => {
   const message = req.body?.message;
   const category = req.body?.category || 'info';
   const target = {
@@ -236,14 +236,14 @@ app.post('/admin/notifications', requireAdmin, (req, res) => {
     productKey: req.body?.productKey,
   };
 
-  const user = licenseStore.findUserByIdentifier(target);
+  const user = await licenseStore.findUserByIdentifier(target);
   if (!user) {
     return res.status(404).json({ error: 'Target user not found (userId/email/productKey)' });
   }
 
   try {
-    const notification = licenseStore.createNotification({
-      userId: user.id,
+    const notification = await licenseStore.createNotification({
+      userId: user._id,
       message,
       category,
       createdBy: req.admin?.via || 'admin',
@@ -611,7 +611,19 @@ function sleep(ms) {
 }
 
 // --- Start ---
-app.listen(config.PORT, () => {
-  console.log(`Chimera Lite backend running on port ${config.PORT}`);
-  getOrRecoverActiveSession().catch(err => console.error('Warm pod recovery failed:', err.message));
-});
+async function boot() {
+  try {
+    await mongoose.connect(config.MONGODB_URI, { dbName: 'purplefinger' });
+    console.log('Connected to MongoDB (purplefinger)');
+  } catch (err) {
+    console.error('MongoDB connection failed:', err.message);
+    process.exit(1);
+  }
+
+  app.listen(config.PORT, () => {
+    console.log(`Chimera Lite backend running on port ${config.PORT}`);
+    getOrRecoverActiveSession().catch(err => console.error('Warm pod recovery failed:', err.message));
+  });
+}
+
+boot();
