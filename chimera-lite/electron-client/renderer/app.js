@@ -8,7 +8,11 @@ const btnModeRealtime = document.getElementById('btn-mode-realtime');
 const btnModeQuality  = document.getElementById('btn-mode-quality');
 const btnLicenseLogin = document.getElementById('btn-license-login');
 const btnLicenseLogout = document.getElementById('btn-license-logout');
-const btnNotificationsRefresh = document.getElementById('btn-notifications-refresh');
+const btnNotifBell    = document.getElementById('btn-notif-bell');
+const btnCloseNotif   = document.getElementById('btn-close-notif');
+const notifBadge      = document.getElementById('notif-badge');
+const notifOverlay    = document.getElementById('notif-overlay');
+const notifPopupBody  = document.getElementById('notif-popup-body');
 const btnOpenTutorial = document.getElementById('btn-open-tutorial');
 const btnCloseTutorial = document.getElementById('btn-close-tutorial');
 const btnOpenDrivers  = document.getElementById('btn-open-drivers');
@@ -21,6 +25,12 @@ const log             = document.getElementById('log');
 const localVideo      = document.getElementById('local-video');
 const remoteCanvas    = document.getElementById('remote-canvas');
 const videoEmpty      = document.getElementById('video-empty');
+const idleState       = document.getElementById('idle-state');
+const sessionLoader   = document.getElementById('session-loader');
+const loaderText      = document.getElementById('loader-text');
+const loaderSub       = document.getElementById('loader-sub');
+const loaderElapsed   = document.getElementById('loader-elapsed');
+const camPlaceholder  = document.getElementById('cam-placeholder');
 const launchOverlay   = document.getElementById('launch-overlay');
 const launchStatus    = document.getElementById('launch-status');
 const launchAscii     = document.getElementById('launch-ascii');
@@ -33,7 +43,6 @@ const cfgWarmPodId    = document.getElementById('cfg-warm-pod-id');
 const cfgRunpodGpuType = document.getElementById('cfg-runpod-gpu-type');
 const cfgCamera       = document.getElementById('cfg-camera');
 const licenseStatus   = document.getElementById('license-status');
-const notificationsList = document.getElementById('notifications-list');
 const configNote      = document.getElementById('config-note');
 const obsUrlLabel     = document.getElementById('obs-url');
 
@@ -61,6 +70,48 @@ function setStatus(text, cls) {
 
 function setLog(msg) {
   log.textContent = msg;
+}
+
+// --- Video area state management ---
+let _elapsedTimer = null;
+
+function showIdleState() {
+  videoEmpty.style.display = 'flex';
+  idleState.style.display = 'flex';
+  sessionLoader.classList.remove('visible');
+  camPlaceholder.style.display = 'flex';
+  if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; }
+  loaderElapsed.textContent = '';
+}
+
+function showLoadingState(title, subtitle) {
+  videoEmpty.style.display = 'flex';
+  idleState.style.display = 'none';
+  sessionLoader.classList.add('visible');
+  camPlaceholder.style.display = 'flex';
+  loaderText.textContent = title || 'Starting session...';
+  loaderSub.textContent = subtitle || 'Provisioning a GPU pod. This usually takes 30–90 seconds.';
+  loaderElapsed.textContent = '0s';
+
+  const t0 = Date.now();
+  if (_elapsedTimer) clearInterval(_elapsedTimer);
+  _elapsedTimer = setInterval(() => {
+    const sec = Math.round((Date.now() - t0) / 1000);
+    const min = Math.floor(sec / 60);
+    const s = sec % 60;
+    loaderElapsed.textContent = min > 0 ? `${min}m ${s}s` : `${sec}s`;
+  }, 1000);
+}
+
+function updateLoaderText(title, subtitle) {
+  if (title) loaderText.textContent = title;
+  if (subtitle) loaderSub.textContent = subtitle;
+}
+
+function hideVideoEmpty() {
+  videoEmpty.style.display = 'none';
+  camPlaceholder.style.display = 'none';
+  if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; }
 }
 
 function setCurrentPod(podId, endpoint) {
@@ -129,20 +180,51 @@ function updateLicenseUI() {
   }
 }
 
-function renderNotifications(items) {
-  if (!notificationsList) return;
-  notificationsList.innerHTML = '';
+// --- Notification sound (short chime via Web Audio API) ---
+let _audioCtx = null;
+function playNotifSound() {
+  try {
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _audioCtx;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.08);
+    osc.frequency.setValueAtTime(1318.51, ctx.currentTime + 0.16);
+    gain.gain.setValueAtTime(0.18, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.45);
+  } catch (_) {}
+}
+
+let _cachedNotifications = [];
+let _unreadCount = 0;
+
+function updateNotifBadge(count) {
+  _unreadCount = count;
+  if (notifBadge) {
+    notifBadge.textContent = count > 99 ? '99+' : String(count);
+    notifBadge.classList.toggle('visible', count > 0);
+  }
+}
+
+function renderNotificationsPopup(items) {
+  if (!notifPopupBody) return;
+  notifPopupBody.innerHTML = '';
   if (!items || !items.length) {
     const empty = document.createElement('div');
-    empty.className = 'panel-copy';
+    empty.className = 'notif-empty';
     empty.textContent = 'No notifications yet.';
-    notificationsList.appendChild(empty);
+    notifPopupBody.appendChild(empty);
     return;
   }
 
   items.forEach((item) => {
     const el = document.createElement('div');
-    el.className = 'notif-item';
+    el.className = 'notif-item' + (item.readAt ? '' : ' unread');
     const createdAt = item.createdAt ? new Date(item.createdAt).toLocaleString() : '—';
     el.innerHTML = `
       <div class="notif-meta"><span>${item.category || 'info'}</span><span>${createdAt}</span></div>
@@ -150,21 +232,56 @@ function renderNotifications(items) {
     `;
     const msg = el.querySelector('.notif-msg');
     if (msg) msg.textContent = item.message || '';
-    notificationsList.appendChild(el);
+    notifPopupBody.appendChild(el);
   });
 }
 
-async function refreshNotifications() {
+async function refreshNotifications(playSound = false) {
   if (!licenseLoggedIn) {
-    renderNotifications([]);
+    _cachedNotifications = [];
+    updateNotifBadge(0);
     return;
   }
   try {
-    const data = await window.chimera.getUserNotifications(false);
-    renderNotifications(data.notifications || []);
+    // Fetch ALL notifications (including read) so we can show full history in popup
+    const data = await window.chimera.getUserNotifications(true);
+    const items = data.notifications || [];
+    _cachedNotifications = items;
+    const unread = items.filter(n => !n.readAt);
+    updateNotifBadge(unread.length);
+    if (playSound && unread.length > 0) {
+      playNotifSound();
+    }
   } catch (err) {
     setLog(`Notification fetch failed: ${err.message}`);
   }
+}
+
+async function markAllNotificationsRead() {
+  const unread = _cachedNotifications.filter(n => !n.readAt);
+  if (!unread.length) return;
+  // Mark each unread notification as read
+  const promises = unread.map(n => {
+    const id = n._id || n.id;
+    if (!id) return Promise.resolve();
+    return window.chimera.markNotificationRead(id).catch(() => {});
+  });
+  await Promise.all(promises);
+  // Refresh to update state
+  await refreshNotifications(false);
+}
+
+async function openNotificationsPopup() {
+  renderNotificationsPopup(_cachedNotifications);
+  notifOverlay.classList.add('visible');
+  // Mark all as read when user opens the popup
+  await markAllNotificationsRead();
+  // Re-render to clear unread styling
+  renderNotificationsPopup(_cachedNotifications);
+}
+
+function closeNotificationsPopup() {
+  notifOverlay.classList.remove('visible');
 }
 
 function sleep(ms) {
@@ -558,7 +675,7 @@ btnLicenseLogin.addEventListener('click', async () => {
     });
     applyConfigToUI(saved);
     setLog('Product key login successful.');
-    await refreshNotifications();
+    await refreshNotifications(true);
   } catch (err) {
     licenseLoggedIn = false;
     licenseUser = null;
@@ -576,7 +693,9 @@ btnLicenseLogout.addEventListener('click', async () => {
     licenseLoggedIn = false;
     licenseUser = null;
     updateLicenseUI();
-    renderNotifications([]);
+    _cachedNotifications = [];
+    updateNotifBadge(0);
+    renderNotificationsPopup([]);
     setLog('Product key session logged out.');
   } catch (err) {
     setLog(`Logout failed: ${err.message}`);
@@ -585,8 +704,24 @@ btnLicenseLogout.addEventListener('click', async () => {
   }
 });
 
-btnNotificationsRefresh.addEventListener('click', () => {
-  refreshNotifications().catch(() => {});
+btnNotifBell.addEventListener('click', () => {
+  openNotificationsPopup().catch(() => {});
+});
+
+btnCloseNotif.addEventListener('click', () => {
+  closeNotificationsPopup();
+});
+
+// Close notification popup on backdrop click
+notifOverlay.addEventListener('click', (e) => {
+  if (e.target === notifOverlay) closeNotificationsPopup();
+});
+
+// Close notification popup on Escape
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && notifOverlay.classList.contains('visible')) {
+    closeNotificationsPopup();
+  }
 });
 
 // --- Camera enumeration ---
@@ -663,6 +798,7 @@ async function startStreaming(ip, port) {
   });
 
   localVideo.srcObject = localStream;
+  camPlaceholder.style.display = 'none';
 
   // Hidden video element — OffscreenCanvas draws from this
   captureVideo = document.createElement('video');
@@ -683,7 +819,7 @@ async function startStreaming(ip, port) {
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
-    videoEmpty.style.display = 'none';
+    hideVideoEmpty();
     setLog(`Streaming — ${ip}:${port}`);
     startStats();
     _captureLoopActive = true;
@@ -724,7 +860,7 @@ function stopStreaming() {
     remoteCanvas.getContext('2d').clearRect(0, 0, remoteCanvas.width, remoteCanvas.height);
   }
 
-  videoEmpty.style.display = 'flex';
+  showIdleState();
 }
 
 // --- Face Upload ---
@@ -758,19 +894,23 @@ btnStart.addEventListener('click', async () => {
   setStatus('Starting...', 'loading');
   setLog('Checking for a reusable warm pod...');
   setLoading(true);
+  showLoadingState('Starting session...', 'Looking for a reusable warm pod...');
 
   try {
     const configuredWarmPodId = String(cfgWarmPodId?.value || '').trim();
     if (configuredWarmPodId) {
       setLog(`Attaching configured warm pod ${configuredWarmPodId}...`);
+      updateLoaderText('Attaching warm pod...', `Connecting to pod ${configuredWarmPodId}`);
       await window.chimera.attachWarmPod(configuredWarmPodId);
     }
 
     const existingStatus = await window.chimera.getStatus();
     if (existingStatus?.active) {
       setLog('Reusable warm pod found. Connecting to it...');
+      updateLoaderText('Warm pod found', 'Reconnecting to existing session...');
     } else {
       setLog('No reusable warm pod found. Provisioning a new GPU pod...');
+      updateLoaderText('Provisioning GPU...', 'Requesting a new GPU pod. This usually takes 30–90 seconds.');
     }
 
     // /start now reuses a live warm pod when one already exists.
@@ -783,8 +923,11 @@ btnStart.addEventListener('click', async () => {
 
     if (data.reused) {
       setLog('Warm pod found. Checking server readiness...');
+      updateLoaderText('Waking warm pod...', 'The inference server is booting up.');
     } else {
-      setLog(`Warm pod not available. Waiting for a new ${cfgRunpodGpuType?.value === 'NVIDIA GeForce RTX 4090' ? 'RTX 4090' : 'RTX 5090'} pod to finish booting...`);
+      const gpuLabel = cfgRunpodGpuType?.value === 'NVIDIA GeForce RTX 4090' ? 'RTX 4090' : 'RTX 5090';
+      setLog(`Warm pod not available. Waiting for a new ${gpuLabel} pod to finish booting...`);
+      updateLoaderText('Booting inference server...', `New ${gpuLabel} pod is starting. Models are loading.`);
     }
 
     // Poll /ready until the inference server is accepting connections.
@@ -804,6 +947,8 @@ btnStart.addEventListener('click', async () => {
       } catch (_) {}
     }
 
+    updateLoaderText('Connecting stream...', 'GPU pod is ready. Opening camera and WebSocket...');
+
     setStatus('Active', 'active');
     setLog(`Streaming — ${data.endpoint.ip}:${data.endpoint.port}`);
     btnUpload.disabled = false;
@@ -812,6 +957,7 @@ btnStart.addEventListener('click', async () => {
   } catch (err) {
     setStatus('Error', 'error');
     setLog('Failed to start: ' + err.message);
+    showIdleState();
     setLoading(false);
   }
 });
@@ -883,7 +1029,7 @@ document.addEventListener('keydown', (e) => {
     licenseUser = licenseSession?.user || null;
     updateLicenseUI();
     if (licenseLoggedIn) {
-      await refreshNotifications();
+      await refreshNotifications(true);
     }
 
     const profileData = await window.chimera.getStreamProfile();
