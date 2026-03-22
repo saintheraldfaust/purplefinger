@@ -460,6 +460,26 @@ let lightProbeCtx = null;
 let currentCaptureFilter = 'none';
 let lastLightProbeAt = 0;
 
+// --- Light Quality Gate ---
+const lightOverlayEl    = document.getElementById('light-overlay');
+const lightOverlayIssueEl = document.getElementById('light-overlay-issue');
+const lightOverlayScoreEl = document.getElementById('light-overlay-score');
+const lightPillEl       = document.getElementById('light-pill');
+const lightPillScoreEl  = document.getElementById('light-pill-score');
+
+let _lightBlocked    = false;   // true → _captureLoop skips ws.send
+let _lightScore      = 100;
+let _lightIssue      = '';
+let _lightState      = 'good';  // 'good' | 'warn' | 'block'
+let _lightConsecBad  = 0;       // consecutive probe ticks below block threshold
+let _lightConsecGood = 0;       // consecutive probe ticks above unblock threshold
+
+const LIGHT_BLOCK_THRESHOLD   = 48;  // score below this → start counting toward block
+const LIGHT_UNBLOCK_THRESHOLD = 64;  // score above this → start counting toward unblock
+const LIGHT_WARN_THRESHOLD    = 70;  // score below this → amber pill (but still streaming)
+const LIGHT_BAD_CONSEC        = 2;   // 2 bad ticks (~600ms) before blocking
+const LIGHT_GOOD_CONSEC       = 2;   // 2 good ticks before unblocking
+
 const STREAM_PROFILES = {
   realtime: {
     label: 'Realtime',
@@ -499,8 +519,63 @@ function ensureLightProbeCanvas() {
   }
 }
 
+// _updateLightGate: state machine that drives _lightBlocked and the UI
+function _updateLightGate(score, issue, avgLuma, rN, gN, bN) {
+  _lightScore = score;
+  _lightIssue = issue;
+
+  if (score < LIGHT_BLOCK_THRESHOLD) {
+    _lightConsecBad++;
+    _lightConsecGood = 0;
+  } else if (score >= LIGHT_UNBLOCK_THRESHOLD) {
+    _lightConsecGood++;
+    _lightConsecBad = Math.max(0, _lightConsecBad - 1);
+  } else {
+    // warn zone — decay both counters; neither triggers a state change
+    _lightConsecBad  = Math.max(0, _lightConsecBad - 1);
+    _lightConsecGood = 0;
+  }
+
+  if (!_lightBlocked && _lightConsecBad >= LIGHT_BAD_CONSEC) {
+    _lightBlocked = true;
+  } else if (_lightBlocked && _lightConsecGood >= LIGHT_GOOD_CONSEC) {
+    _lightBlocked = false;
+  }
+
+  _lightState = _lightBlocked ? 'block' : score < LIGHT_WARN_THRESHOLD ? 'warn' : 'good';
+
+  if (_lightBlocked) {
+    if (lightOverlayEl && !lightOverlayEl.classList.contains('visible')) {
+      lightOverlayEl.classList.add('visible');
+    }
+    if (lightOverlayIssueEl) lightOverlayIssueEl.textContent = issue || 'Adjust your lighting to resume.';
+    if (lightOverlayScoreEl) lightOverlayScoreEl.textContent = `Light quality score: ${score}%`;
+  } else {
+    if (lightOverlayEl) lightOverlayEl.classList.remove('visible');
+  }
+
+  if (lightPillEl && lightPillEl.style.display !== 'none') {
+    const scoreColor = _lightState === 'block' ? '#f87171' : _lightState === 'warn' ? '#fbbf24' : '#34d399';
+    if (lightPillScoreEl) {
+      lightPillScoreEl.textContent = `${score}%`;
+      lightPillScoreEl.style.color = scoreColor;
+    }
+  }
+}
+
+function resetLightGate() {
+  _lightBlocked    = false;
+  _lightScore      = 100;
+  _lightIssue      = '';
+  _lightState      = 'good';
+  _lightConsecBad  = 0;
+  _lightConsecGood = 0;
+  if (lightOverlayEl) lightOverlayEl.classList.remove('visible');
+  if (lightPillEl)    lightPillEl.style.display = 'none';
+}
+
 function updateCaptureFilter() {
-  if (currentProfile !== 'realtime' || !captureVideo || captureVideo.readyState < 2) {
+  if (!captureVideo || captureVideo.readyState < 2) {
     currentCaptureFilter = 'none';
     return;
   }
@@ -510,28 +585,110 @@ function updateCaptureFilter() {
   lastLightProbeAt = now;
 
   ensureLightProbeCanvas();
-  if (!lightProbeCtx) {
-    currentCaptureFilter = 'none';
-    return;
-  }
+  if (!lightProbeCtx) { currentCaptureFilter = 'none'; return; }
 
   lightProbeCtx.filter = 'none';
   lightProbeCtx.drawImage(captureVideo, 0, 0, lightProbe.width, lightProbe.height);
-
   const { data } = lightProbeCtx.getImageData(0, 0, lightProbe.width, lightProbe.height);
-  let total = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    total += (data[i] * 0.299) + (data[i + 1] * 0.587) + (data[i + 2] * 0.114);
+
+  const W = lightProbe.width;   // 32
+  const H = lightProbe.height;  // 18
+
+  // Face zone: centre 60% width × centre 70% height — avoids background edges
+  const xMin = Math.floor(W * 0.20); // 6
+  const xMax = Math.floor(W * 0.80); // 25
+  const yMin = Math.floor(H * 0.15); // 2
+  const yMax = Math.floor(H * 0.85); // 15
+  const xMid = (xMin + xMax) >> 1;   // 15 — left/right split
+  const yZ1  = yMin + Math.floor((yMax - yMin) / 3);      // 6
+  const yZ2  = yMin + Math.floor((yMax - yMin) * 2 / 3);  // 10
+
+  let lumaSum = 0, rSum = 0, gSum = 0, bSum = 0;
+  let clipCount = 0, pixCount = 0;
+  let leftLuma = 0, leftCount = 0, rightLuma = 0, rightCount = 0;
+  const zLuma = [0, 0, 0], zCount = [0, 0, 0];
+
+  for (let y = yMin; y < yMax; y++) {
+    for (let x = xMin; x < xMax; x++) {
+      const i = (y * W + x) * 4;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const luma = r * 0.299 + g * 0.587 + b * 0.114;
+      lumaSum += luma; rSum += r; gSum += g; bSum += b;
+      if (luma > 235) clipCount++;
+      pixCount++;
+      if (x < xMid) { leftLuma += luma; leftCount++; }
+      else           { rightLuma += luma; rightCount++; }
+      const zi = y < yZ1 ? 0 : y < yZ2 ? 1 : 2;
+      zLuma[zi] += luma; zCount[zi]++;
+    }
   }
 
-  const avgLuma = total / (data.length / 4);
-  if (avgLuma < 72) {
-    currentCaptureFilter = 'brightness(1.24) contrast(1.12) saturate(1.05)';
-  } else if (avgLuma < 96) {
-    currentCaptureFilter = 'brightness(1.12) contrast(1.06) saturate(1.03)';
+  if (pixCount === 0) { currentCaptureFilter = 'none'; return; }
+
+  const avgLuma = lumaSum / pixCount;
+
+  // --- Brightness compensation filter (existing logic, realtime only) ---
+  if (currentProfile === 'realtime') {
+    if (avgLuma < 72)      currentCaptureFilter = 'brightness(1.24) contrast(1.12) saturate(1.05)';
+    else if (avgLuma < 96) currentCaptureFilter = 'brightness(1.12) contrast(1.06) saturate(1.03)';
+    else                   currentCaptureFilter = 'none';
   } else {
     currentCaptureFilter = 'none';
   }
+
+  // --- Light quality scoring (runs in both profiles) ---
+  const avgR = rSum / pixCount, avgG = gSum / pixCount, avgB = bSum / pixCount;
+  const rgbTotal = avgR + avgG + avgB + 1;
+  const rN = avgR / rgbTotal, gN = avgG / rgbTotal, bN = avgB / rgbTotal;
+  const neutral = 1 / 3;
+  const castStrength = Math.max(Math.abs(rN - neutral), Math.abs(gN - neutral), Math.abs(bN - neutral));
+
+  const lL = leftCount  ? leftLuma  / leftCount  : 0;
+  const lR = rightCount ? rightLuma / rightCount : 0;
+  const shadowAsymmetry = Math.abs(lL - lR) / Math.max(lL, lR, 1);
+
+  const clipRatio   = clipCount / pixCount;
+  const zAvgs       = zLuma.map((s, i) => zCount[i] > 0 ? s / zCount[i] : avgLuma);
+  const minZoneLuma = Math.min(...zAvgs);
+
+  // Luma score 0–40: optimal 80–185, smooth ramps either side
+  let lumaScore;
+  if      (avgLuma < 35)  lumaScore = 0;
+  else if (avgLuma < 60)  lumaScore = (avgLuma - 35) / 25 * 20;
+  else if (avgLuma < 80)  lumaScore = 20 + (avgLuma - 60) / 20 * 20;
+  else if (avgLuma <= 185) lumaScore = 40;
+  else if (avgLuma <= 215) lumaScore = 40 - (avgLuma - 185) / 30 * 20;
+  else                    lumaScore = Math.max(0, 20 - (avgLuma - 215) / 40 * 20);
+
+  // Color cast 0–30: neutral = 30, castStrength 0.19+ = 0
+  const castScore     = Math.max(0, 30 - castStrength * 158);
+  // Shadow asymmetry 0–15: symmetric = 15, extreme asymmetry = 0
+  const shadowScore   = Math.max(0, 15 - shadowAsymmetry * 32);
+  // Highlight clipping 0–10
+  const clipScore     = Math.max(0, 10 - clipRatio * 50);
+  // Min zone (darkest face band) 0–5
+  const minZoneScore  = minZoneLuma < 20 ? 0 : Math.min(5, (minZoneLuma - 20) / 20 * 5);
+
+  const score = Math.round(Math.min(100, lumaScore + castScore + shadowScore + clipScore + minZoneScore));
+
+  // Issue text — most dominant problem first
+  let issue = '';
+  if (avgLuma < 55) {
+    issue = 'Room is too dark — you need more light on your face';
+  } else if (avgLuma > 215) {
+    issue = 'Overexposed — reduce direct light or step back from it';
+  } else if (castStrength > 0.12) {
+    if      (bN > rN + 0.06 && bN > gN + 0.03) issue = 'Blue light detected — use a neutral white light source';
+    else if (rN > gN + 0.05 && rN > bN + 0.06) issue = 'Warm/red light detected — use neutral white light';
+    else if (gN > rN + 0.04 && gN > bN + 0.04) issue = 'Green tint detected — use a neutral white light source';
+    else                                         issue = 'Colored ambient light — use a neutral white light source';
+  } else if (shadowAsymmetry > 0.40) {
+    issue = 'Harsh side shadows — add a fill light on your dark side';
+  } else if (minZoneLuma < 30) {
+    issue = 'Part of your face is too dark — ensure even lighting';
+  }
+
+  _updateLightGate(score, issue, avgLuma, rN, gN, bN);
 }
 
 function applyPreviewFilter() {
@@ -596,17 +753,21 @@ async function _captureLoop() {
     const t0 = performance.now();
 
     ensureOffscreenCanvas();
-    updateCaptureFilter();
+    updateCaptureFilter();   // also runs light quality analysis + updates _lightBlocked
     offCtx.filter = currentCaptureFilter;
     offCtx.drawImage(captureVideo, 0, 0, currentSendW, currentSendH);
     offCtx.filter = 'none';
 
-    try {
-      const blob = await offscreen.convertToBlob({ type: 'image/jpeg', quality: currentSendQuality });
-      sentFrames++;
-      lastSentAt = Date.now();
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(blob);
-    } catch (_) { /* ignore */ }
+    // Skip encode + send when light conditions are too poor.
+    // The drawImage above still runs so the light probe stays fresh.
+    if (!_lightBlocked) {
+      try {
+        const blob = await offscreen.convertToBlob({ type: 'image/jpeg', quality: currentSendQuality });
+        sentFrames++;
+        lastSentAt = Date.now();
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(blob);
+      } catch (_) { /* ignore */ }
+    }
 
     // Pace to at most currentSendFps; if encode took longer just continue immediately.
     const elapsed = performance.now() - t0;
@@ -641,6 +802,8 @@ function startStats() {
   if (statsTimer) clearInterval(statsTimer);
   resetStats();
   showConnScore();
+  resetLightGate();
+  if (lightPillEl) lightPillEl.style.display = 'flex';
   _connHistory = [];
   _stallCount = 0;
   hideReconnectBanner();
@@ -896,12 +1059,14 @@ btnReconnect.addEventListener('click', () => doReconnect());
 
 // --- Privacy Shield toggle (header button) ---
 let _privacyShieldEnabled = true;
+const shieldTooltipStatus = document.getElementById('shield-tooltip-status');
 btnPrivacyShield.addEventListener('click', () => {
   _privacyShieldEnabled = !_privacyShieldEnabled;
   btnPrivacyShield.classList.toggle('shield-active', _privacyShieldEnabled);
-  btnPrivacyShield.title = _privacyShieldEnabled
-    ? 'Privacy Shield — auto-hide video on poor connection (ON)'
-    : 'Privacy Shield — auto-hide video on poor connection (OFF)';
+  if (shieldTooltipStatus) {
+    shieldTooltipStatus.textContent = _privacyShieldEnabled ? '● Currently ON' : '● Currently OFF';
+    shieldTooltipStatus.classList.toggle('off', !_privacyShieldEnabled);
+  }
   if (!_privacyShieldEnabled) hidePrivacyShield();
 });
 btnSaveConfig.addEventListener('click', async () => {
@@ -1177,6 +1342,7 @@ function stopStreaming() {
   hideConnScore();
   hideReconnectBanner();
   hidePrivacyShield();
+  resetLightGate();
 
   if (ws) { ws.close(); ws = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
