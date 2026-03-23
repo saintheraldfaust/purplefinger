@@ -8,6 +8,7 @@ module.exports = {
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'change-me',
   LICENSE_SESSION_TTL_MS: Number(process.env.LICENSE_SESSION_TTL_MS || 7 * 24 * 60 * 60 * 1000),
   ADMIN_SESSION_TTL_MS: Number(process.env.ADMIN_SESSION_TTL_MS || 12 * 60 * 60 * 1000),
+  ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || '',
   RUNPOD_API_KEY: process.env.RUNPOD_API_KEY,
   // Ordered cheapest-first. startPod() walks this list until one succeeds.
   RUNPOD_GPU_FALLBACK_CHAIN: [

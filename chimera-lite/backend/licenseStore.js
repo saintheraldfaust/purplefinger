@@ -180,6 +180,26 @@ class LicenseStore {
     return user;
   }
 
+  async inspectUserSessionToken(token) {
+    this._cleanupSessions();
+    const normalized = String(token || '').trim();
+    if (!normalized) return { ok: false, reason: 'missing_token' };
+
+    const session = this.userSessions.get(normalized);
+    if (!session) return { ok: false, reason: 'missing_session' };
+
+    const user = await User.findById(session.userId).lean();
+    if (!user) {
+      this.userSessions.delete(normalized);
+      return { ok: false, reason: 'missing_user' };
+    }
+    if (!user.active) {
+      this.userSessions.delete(normalized);
+      return { ok: false, reason: 'inactive_user', user };
+    }
+    return { ok: true, user };
+  }
+
   invalidateUserToken(token) {
     this.userSessions.delete(String(token || '').trim());
   }

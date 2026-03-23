@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src *; media-src *; img-src 'self' blob: data:" />
-  <title>Project Chimera Lite</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src *; media-src * blob:; img-src 'self' blob: data:" />
+  <title>Project Purplefinger</title>
   <style>
     :root {
       --blue: #2563eb;
@@ -311,70 +311,36 @@
     }
     .nav-icon-btn.shield-active:hover { background: rgba(6, 78, 59, 0.42); }
 
-    /* --- Shield Tooltip Popover --- */
+    /* --- Privacy Shield inline label --- */
     .shield-wrap {
-      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 7px;
     }
-    .shield-tooltip {
-      position: absolute;
-      top: calc(100% + 10px);
-      right: 0;
-      width: 270px;
-      padding: 14px 16px;
-      border-radius: 14px;
-      border: 1px solid rgba(52, 211, 153, 0.22);
-      background: rgba(8, 14, 30, 0.97);
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
-      backdrop-filter: blur(16px);
-      opacity: 0;
-      visibility: hidden;
-      transform: translateY(-6px);
-      transition: opacity 0.18s, visibility 0.18s, transform 0.18s;
-      z-index: 9000;
-      pointer-events: none;
+    .shield-label {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.25;
+      user-select: none;
     }
-    .shield-wrap:hover .shield-tooltip {
-      opacity: 1;
-      visibility: visible;
-      transform: translateY(0);
-      pointer-events: auto;
-    }
-    .shield-tooltip::before {
-      content: '';
-      position: absolute;
-      top: -6px;
-      right: 14px;
-      width: 12px;
-      height: 12px;
-      background: rgba(8, 14, 30, 0.97);
-      border-top: 1px solid rgba(52, 211, 153, 0.22);
-      border-left: 1px solid rgba(52, 211, 153, 0.22);
-      transform: rotate(45deg);
-    }
-    .shield-tooltip-title {
-      font-size: 0.78rem;
-      font-weight: 800;
-      color: #34d399;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      margin-bottom: 6px;
-    }
-    .shield-tooltip-body {
-      font-size: 0.76rem;
-      color: #94a3b8;
-      line-height: 1.55;
-    }
-    .shield-tooltip-body strong {
-      color: #e2e8f0;
-    }
-    .shield-tooltip-status {
-      margin-top: 8px;
+    .shield-label-name {
       font-size: 0.72rem;
+      font-weight: 700;
+      color: #34d399;
+      letter-spacing: 0.03em;
+    }
+    .shield-label-desc {
+      font-size: 0.64rem;
+      color: #64748b;
+      max-width: 160px;
+    }
+    #shield-tooltip-status {
+      font-size: 0.65rem;
       font-weight: 700;
       color: #34d399;
       letter-spacing: 0.04em;
     }
-    .shield-tooltip-status.off { color: #f87171; }
+    #shield-tooltip-status.off { color: #f87171; }
 
     .notif-badge {
       position: absolute;
@@ -469,6 +435,112 @@
       gap: 10px;
       max-height: 480px;
       overflow-y: auto;
+    }
+
+    /* --- Product key contact popup --- */
+    #key-contact-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9550;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(2, 6, 23, 0.78);
+      backdrop-filter: blur(10px);
+      padding: 20px;
+    }
+    #key-contact-overlay.visible { display: flex; }
+    #key-contact-popup {
+      width: min(520px, 100%);
+      border-radius: 22px;
+      border: 1px solid rgba(168, 85, 247, 0.28);
+      background: rgba(8, 14, 30, 0.97);
+      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.52);
+      overflow: hidden;
+      animation: notif-slide-in 0.22s ease-out;
+    }
+    #key-contact-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      border-bottom: 1px solid rgba(168, 85, 247, 0.16);
+      background: rgba(30, 27, 75, 0.55);
+    }
+    #key-contact-title {
+      font-size: 0.82rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #d8b4fe;
+      font-weight: 800;
+    }
+    #btn-close-key-contact {
+      background: rgba(239, 68, 68, 0.18);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+      border-radius: 10px;
+      padding: 6px 16px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    #btn-close-key-contact:hover { background: rgba(239, 68, 68, 0.32); }
+    #key-contact-body {
+      padding: 20px;
+      display: grid;
+      gap: 14px;
+    }
+    .key-contact-message {
+      border: 1px solid rgba(168, 85, 247, 0.18);
+      border-radius: 14px;
+      background: rgba(17, 24, 39, 0.72);
+      padding: 16px;
+      color: #dbeafe;
+      line-height: 1.65;
+      font-size: 0.9rem;
+    }
+    .key-contact-message strong {
+      color: #f5d0fe;
+    }
+    .key-contact-meta {
+      display: grid;
+      gap: 8px;
+      font-size: 0.82rem;
+      color: #cbd5e1;
+    }
+    .key-contact-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      width: fit-content;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(168, 85, 247, 0.22);
+      background: rgba(76, 29, 149, 0.22);
+      color: #e9d5ff;
+      font-weight: 700;
+    }
+    .key-contact-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+    .key-contact-btn {
+      border: 1px solid rgba(34, 197, 94, 0.35);
+      background: rgba(34, 197, 94, 0.14);
+      color: #86efac;
+      border-radius: 12px;
+      padding: 10px 16px;
+      font-size: 0.82rem;
+      font-weight: 800;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .key-contact-btn:hover {
+      background: rgba(34, 197, 94, 0.24);
+      border-color: rgba(34, 197, 94, 0.58);
     }
 
     .notif-item {
@@ -700,8 +772,9 @@
       font-weight: 700;
     }
 
-    /* Hide local-video when no stream (cam-placeholder visible instead) */
-    #local-video:not([src]):not([srcObject]) { opacity: 0; }
+    /* Local camera PiP — hidden by default, shown via JS .active class when stream starts */
+    #local-video { opacity: 0; transition: opacity 0.3s ease; }
+    #local-video.active { opacity: 1; }
 
     #idle-state {
       display: flex;
@@ -1319,6 +1392,589 @@
     /* ── Light Quality pill (in top-left overlay) ── */
     #light-pill { display: none; gap: 5px; align-items: center; }
     #light-pill-score { font-variant-numeric: tabular-nums; transition: color 0.4s ease; }
+
+    /* ═══════════════════════════════════════════════════════════════
+       LIPSYNC STUDIO PANEL
+    ═══════════════════════════════════════════════════════════════ */
+    .ls-subtitle {
+      font-size: 0.68rem; color: var(--muted); margin-bottom: 10px;
+    }
+    .ls-step-header {
+      font-size: 0.72rem; font-weight: 700; color: #93c5fd;
+      margin: 10px 0 6px; letter-spacing: 0.02em;
+    }
+    .ls-step-header:first-of-type { margin-top: 0; }
+
+    /* ── Text area ── */
+    .ls-textarea {
+      width: 100%; box-sizing: border-box; resize: vertical;
+      background: rgba(15,23,42,0.6); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 12px;
+      color: var(--text); font-size: 0.76rem; font-family: inherit;
+      line-height: 1.5; transition: border-color 0.2s;
+      min-height: 70px; max-height: 200px;
+    }
+    .ls-textarea:focus {
+      outline: none; border-color: rgba(96,165,250,0.5);
+      box-shadow: 0 0 0 2px rgba(96,165,250,0.1);
+    }
+    .ls-textarea::placeholder { color: var(--muted); opacity: 0.7; }
+    .ls-char-count {
+      font-size: 0.6rem; color: var(--muted); text-align: right; margin: 2px 0 8px;
+    }
+
+    /* ── Generate button ── */
+    .ls-generate-btn {
+      width: 100%; padding: 10px 16px; border-radius: 8px;
+      border: 1px solid rgba(96,165,250,0.35);
+      background: linear-gradient(135deg, rgba(37,99,235,0.2), rgba(124,58,237,0.15));
+      color: #93c5fd; font-size: 0.78rem; font-weight: 700;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      gap: 8px; transition: all 0.2s;
+    }
+    .ls-generate-btn svg {
+      width: 18px; height: 18px; fill: currentColor;
+    }
+    .ls-generate-btn:hover:not(:disabled) {
+      background: linear-gradient(135deg, rgba(37,99,235,0.35), rgba(124,58,237,0.25));
+      border-color: rgba(96,165,250,0.6);
+      box-shadow: 0 0 16px rgba(96,165,250,0.15);
+    }
+    .ls-generate-btn:disabled {
+      opacity: 0.4; cursor: not-allowed;
+    }
+    .ls-generate-btn.generating {
+      animation: lsGenPulse 1.2s infinite;
+    }
+    @keyframes lsGenPulse {
+      0%,100% { box-shadow: 0 0 8px rgba(96,165,250,0.1); }
+      50%     { box-shadow: 0 0 24px rgba(96,165,250,0.3); }
+    }
+    .ls-status {
+      font-size: 0.66rem; color: var(--muted); text-align: center;
+      margin-top: 6px; min-height: 16px;
+    }
+
+    /* ── Teleprompter ── */
+    .ls-teleprompter-wrap {
+      margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px;
+    }
+    .ls-teleprompter {
+      background: rgba(15,23,42,0.7); border: 1px solid var(--border);
+      border-radius: 10px; padding: 16px 18px;
+      font-size: 1.1rem; line-height: 1.8; color: rgba(226,232,240,0.4);
+      min-height: 80px; max-height: 220px; overflow-y: auto;
+      text-align: center; word-spacing: 2px;
+      scroll-behavior: smooth; position: relative;
+    }
+    .ls-teleprompter::-webkit-scrollbar { width: 4px; }
+    .ls-teleprompter::-webkit-scrollbar-thumb { background: rgba(96,165,250,0.2); border-radius: 2px; }
+    .ls-word {
+      display: inline; padding: 2px 1px; border-radius: 3px;
+      transition: color 0.15s, background 0.15s;
+    }
+    .ls-word.active {
+      color: #fff; background: rgba(37,99,235,0.35);
+      text-shadow: 0 0 8px rgba(96,165,250,0.5);
+    }
+    .ls-word.spoken {
+      color: rgba(148,163,184,0.7);
+    }
+
+    /* ── Playback controls ── */
+    .ls-playback-controls {
+      display: flex; align-items: center; gap: 6px; margin-top: 10px;
+    }
+    .ls-ctrl-btn {
+      width: 32px; height: 32px; border-radius: 50%;
+      border: 1px solid var(--border); background: rgba(15,23,42,0.5);
+      color: var(--muted); cursor: pointer; display: flex;
+      align-items: center; justify-content: center;
+      transition: all 0.15s; flex-shrink: 0;
+    }
+    .ls-ctrl-btn:hover { border-color: rgba(96,165,250,0.5); color: #60a5fa; }
+    .ls-ctrl-btn svg { width: 16px; height: 16px; fill: currentColor; }
+    .ls-play {
+      width: 38px; height: 38px; border-color: rgba(96,165,250,0.4);
+      background: rgba(37,99,235,0.15); color: #60a5fa;
+    }
+    .ls-play:hover { background: rgba(37,99,235,0.3); }
+    .ls-loop-off { opacity: 0.4; }
+    .ls-loop-on { color: #60a5fa; border-color: rgba(96,165,250,0.5); opacity: 1; }
+
+    .ls-progress-wrap {
+      flex: 1; height: 4px; background: rgba(100,116,139,0.2);
+      border-radius: 2px; overflow: hidden; cursor: pointer;
+    }
+    .ls-progress-bar {
+      height: 100%; width: 100%; border-radius: 2px;
+      background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+      transform-origin: left center;
+      transform: scaleX(0);
+      will-change: transform;
+    }
+    .ls-time {
+      font-size: 0.62rem; color: var(--muted); white-space: nowrap; min-width: 72px;
+      text-align: center;
+    }
+    .ls-speed-row {
+      display: flex; align-items: center; gap: 6px; margin-top: 6px;
+      font-size: 0.62rem; color: var(--muted);
+    }
+    .ls-speed-btn {
+      padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); font-size: 0.62rem;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .ls-speed-btn:hover { border-color: rgba(96,165,250,0.4); color: var(--text); }
+    .ls-speed-btn.active {
+      background: rgba(37,99,235,0.18); border-color: rgba(96,165,250,0.5);
+      color: #93c5fd;
+    }
+
+    /* ── Download button ── */
+    .ls-download-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 6px;
+      border: 1px solid rgba(34,197,94,0.35); background: rgba(34,197,94,0.1);
+      color: #4ade80; font-size: 0.68rem; font-weight: 600;
+      cursor: pointer; transition: all 0.2s; margin-top: 8px;
+    }
+    .ls-download-btn:hover {
+      background: rgba(34,197,94,0.2); border-color: rgba(34,197,94,0.6);
+      color: #86efac;
+    }
+    .ls-download-btn svg { width: 14px; height: 14px; fill: currentColor; flex-shrink: 0; }
+    .ls-download-btn:disabled {
+      opacity: 0.3; cursor: default;
+      border-color: var(--border); color: var(--muted); background: transparent;
+    }
+
+    /* ── Voice-note tip ── */
+    .ls-voicenote-tip {
+      display: none; margin-top: 10px;
+      background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.18);
+      border-radius: 8px; padding: 10px 14px;
+      font-size: 0.66rem; color: #86efac; line-height: 1.6;
+    }
+    .ls-voicenote-tip.visible { display: block; }
+    .ls-voicenote-tip strong { color: #4ade80; }
+    .ls-voicenote-tip .ls-vn-icons { font-size: 1rem; margin-right: 4px; }
+
+    /* ── Audio setup guide ── */
+    .ls-guide {
+      margin-top: 12px; border: 1px solid var(--border); border-radius: 8px;
+      overflow: hidden;
+    }
+    .ls-guide-summary {
+      padding: 10px 14px; font-size: 0.74rem; font-weight: 700;
+      color: var(--text); cursor: pointer; list-style: none;
+      background: rgba(15,23,42,0.5); transition: background 0.15s;
+    }
+    .ls-guide-summary:hover { background: rgba(30,41,59,0.7); }
+    .ls-guide-summary::-webkit-details-marker { display: none; }
+    .ls-guide-summary::before {
+      content: '▸ '; color: var(--muted); transition: transform 0.15s;
+    }
+    .ls-guide[open] .ls-guide-summary::before { content: '▾ '; }
+    .ls-guide-body { padding: 12px 14px; }
+    .ls-guide-step {
+      display: flex; gap: 10px; margin-bottom: 12px; align-items: flex-start;
+    }
+    .ls-guide-num {
+      width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+      background: rgba(37,99,235,0.2); color: #60a5fa;
+      font-size: 0.68rem; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ls-guide-step div { font-size: 0.7rem; color: var(--text); line-height: 1.5; }
+    .ls-guide-step strong { color: #e2e8f0; }
+    .ls-guide-note { font-size: 0.64rem; color: var(--muted); }
+    .ls-link {
+      color: #60a5fa; text-decoration: none; font-weight: 600;
+    }
+    .ls-link:hover { text-decoration: underline; }
+    .ls-guide-tip {
+      background: rgba(250,204,21,0.08); border: 1px solid rgba(250,204,21,0.15);
+      border-radius: 6px; padding: 8px 12px; font-size: 0.66rem;
+      color: #fbbf24; line-height: 1.5;
+    }
+    .ls-guide-tip strong { color: #fcd34d; }
+
+    /* ── Header badge (reuse) ── */
+    @keyframes vcPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* Filter bar */
+    .vc-filters {
+      display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap;
+    }
+    .vc-filter-btn {
+      padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); font-size: 0.68rem;
+      cursor: pointer; transition: all 0.15s; font-weight: 600;
+    }
+    .vc-filter-btn:hover { border-color: rgba(96,165,250,0.35); color: var(--text); }
+    .vc-filter-btn.active {
+      background: rgba(37,99,235,0.18); border-color: rgba(96,165,250,0.5);
+      color: #93c5fd;
+    }
+
+    /* Voice list */
+    .vc-voice-list {
+      max-height: 200px; overflow-y: auto; display: flex; flex-direction: column;
+      gap: 4px; margin-bottom: 8px; padding-right: 2px;
+    }
+    .vc-voice-list::-webkit-scrollbar { width: 4px; }
+    .vc-voice-list::-webkit-scrollbar-thumb { background: rgba(96,165,250,0.2); border-radius: 2px; }
+
+    .vc-voice-card {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border-radius: 8px;
+      border: 1px solid transparent; cursor: pointer;
+      transition: all 0.15s; background: rgba(15,23,42,0.5);
+    }
+    .vc-voice-card:hover {
+      background: rgba(30,41,59,0.7); border-color: var(--border);
+    }
+    .vc-voice-card.selected {
+      background: rgba(37,99,235,0.12); border-color: rgba(96,165,250,0.4);
+    }
+    .vc-voice-card.special {
+      background: linear-gradient(135deg, rgba(250,204,21,0.06), rgba(245,158,11,0.04));
+      border: 1px solid rgba(250,204,21,0.25);
+      position: relative;
+    }
+    .vc-voice-card.special:hover {
+      background: linear-gradient(135deg, rgba(250,204,21,0.12), rgba(245,158,11,0.08));
+      border-color: rgba(250,204,21,0.45);
+    }
+    .vc-voice-card.special.selected {
+      background: linear-gradient(135deg, rgba(250,204,21,0.15), rgba(245,158,11,0.1));
+      border-color: rgba(250,204,21,0.6);
+      box-shadow: 0 0 12px rgba(250,204,21,0.15);
+    }
+    .vc-voice-badge {
+      display: inline-block; margin-left: 6px;
+      padding: 1px 6px; border-radius: 4px; font-size: 0.52rem;
+      font-weight: 800; letter-spacing: 0.04em;
+      background: rgba(250,204,21,0.15); color: #fbbf24;
+      border: 1px solid rgba(250,204,21,0.3);
+      vertical-align: middle; line-height: 1.4;
+    }
+    .vc-voice-avatar {
+      width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.72rem; font-weight: 700;
+    }
+    .vc-voice-avatar.male { background: rgba(59,130,246,0.2); color: #60a5fa; }
+    .vc-voice-avatar.female { background: rgba(236,72,153,0.2); color: #f472b6; }
+    .vc-voice-avatar.other { background: rgba(168,85,247,0.2); color: #c084fc; }
+    .vc-voice-info { flex: 1; min-width: 0; }
+    .vc-voice-name {
+      font-size: 0.74rem; font-weight: 600; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .vc-voice-meta {
+      font-size: 0.62rem; color: var(--muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .vc-voice-preview {
+      width: 22px; height: 22px; border-radius: 50%;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--muted); cursor: pointer; display: flex;
+      align-items: center; justify-content: center; flex-shrink: 0;
+      transition: all 0.15s;
+    }
+    .vc-voice-preview:hover { border-color: rgba(96,165,250,0.5); color: #60a5fa; }
+    .vc-voice-preview svg { width: 12px; height: 12px; fill: currentColor; }
+
+    .vc-empty {
+      text-align: center; padding: 16px 8px;
+      font-size: 0.72rem; color: var(--muted);
+    }
+    .vc-loading { text-align: center; padding: 12px; color: var(--muted); font-size: 0.72rem; }
+
+    /* Voice changer active indicator in header */
+    .vc-header-badge {
+      display: none; align-items: center; gap: 4px;
+      padding: 4px 10px; border-radius: 6px;
+      background: rgba(34,197,94,0.12); color: #4ade80;
+      font-size: 0.66rem; font-weight: 700;
+      animation: vcPulse 1.5s infinite;
+    }
+    .vc-header-badge.visible { display: inline-flex; }
+
+    /* ═══════════════════════════════════════════════════════════════
+       RECORD SESSION
+    ═══════════════════════════════════════════════════════════════ */
+    .btn-record {
+      display: flex; align-items: center; gap: 7px;
+      padding: 7px 15px;
+      border-radius: 9px;
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      background: rgba(239, 68, 68, 0.10);
+      color: #fca5a5;
+      font-size: 0.76rem;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      flex-shrink: 0;
+    }
+    .btn-record:hover {
+      background: rgba(239, 68, 68, 0.22);
+      border-color: rgba(239, 68, 68, 0.6);
+      color: #fecaca;
+    }
+    .btn-record.recording {
+      background: rgba(239, 68, 68, 0.30);
+      border-color: rgba(239, 68, 68, 0.8);
+      color: #fff;
+      animation: recPulse 1.2s infinite;
+    }
+    .btn-record svg { width: 15px; height: 15px; fill: currentColor; flex-shrink: 0; }
+    @keyframes recPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+      50%      { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+    }
+
+    /* Record timer badge */
+    .rec-timer {
+      display: none; align-items: center; gap: 4px;
+      padding: 4px 10px; border-radius: 6px;
+      background: rgba(239, 68, 68, 0.15); color: #f87171;
+      font-size: 0.66rem; font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .rec-timer.visible { display: inline-flex; }
+    .rec-timer .rec-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #ef4444;
+      animation: recDotBlink 1s infinite;
+    }
+    @keyframes recDotBlink {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.25; }
+    }
+
+    /* Audio device selector dropdown */
+    .rec-audio-select-wrap {
+      position: relative;
+      display: none;
+    }
+    .rec-audio-select-wrap.visible { display: block; }
+    .rec-audio-select {
+      appearance: none;
+      padding: 5px 24px 5px 8px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.9);
+      color: #93c5fd;
+      font-size: 0.68rem;
+      font-family: inherit;
+      cursor: pointer;
+      max-width: 170px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .rec-audio-select:focus { outline: none; border-color: rgba(99,102,241,0.5); }
+
+    /* ── Recording save bar (top strip) ── */
+    .rec-save-bar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
+      display: none; align-items: center; gap: 12px;
+      padding: 10px 20px;
+      background: rgba(15, 23, 42, 0.97);
+      border-bottom: 1px solid rgba(99,102,241,0.3);
+      backdrop-filter: blur(6px);
+      box-shadow: 0 2px 16px rgba(0,0,0,0.4);
+      transform: translateY(-100%);
+      transition: transform 0.3s ease;
+    }
+    .rec-save-bar.visible { display: flex; transform: translateY(0); }
+    .rec-save-bar.done { border-bottom-color: rgba(34,197,94,0.5); }
+    .rec-save-spinner {
+      width: 22px; height: 22px; flex-shrink: 0;
+      border: 3px solid rgba(99,102,241,0.15);
+      border-top-color: #818cf8;
+      border-radius: 50%;
+      animation: recSpin 0.7s linear infinite;
+    }
+    .rec-save-bar.done .rec-save-spinner { display: none; }
+    @keyframes recSpin { to { transform: rotate(360deg); } }
+    .rec-save-check {
+      display: none; width: 22px; height: 22px; flex-shrink: 0;
+      fill: #4ade80;
+    }
+    .rec-save-bar.done .rec-save-check { display: block; }
+    .rec-save-label {
+      font-size: 0.78rem; font-weight: 700; color: #c7d2fe;
+      white-space: nowrap;
+    }
+    .rec-save-bar.done .rec-save-label { color: #86efac; }
+    .rec-save-sub {
+      font-size: 0.66rem; color: var(--muted); flex: 1;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .rec-save-progress {
+      flex: 1; max-width: 200px; height: 4px;
+      background: rgba(100,116,139,0.2); border-radius: 2px; overflow: hidden;
+    }
+    .rec-save-bar.done .rec-save-progress { display: none; }
+    .rec-save-progress-fill {
+      height: 100%; width: 0; border-radius: 2px;
+      background: linear-gradient(90deg, #6366f1, #818cf8);
+      transition: width 0.3s ease;
+    }
+    .rec-save-open-btn {
+      display: none; padding: 5px 14px; border-radius: 6px;
+      border: 1px solid rgba(34,197,94,0.4); background: rgba(34,197,94,0.12);
+      color: #4ade80; font-size: 0.68rem; font-weight: 700;
+      cursor: pointer; white-space: nowrap; transition: all 0.15s;
+    }
+    .rec-save-open-btn:hover {
+      background: rgba(34,197,94,0.25); border-color: rgba(34,197,94,0.7);
+    }
+    .rec-save-bar.done .rec-save-open-btn { display: inline-flex; }
+    .rec-save-dismiss {
+      padding: 4px 10px; border-radius: 5px;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--muted); font-size: 0.64rem; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .rec-save-dismiss:hover { border-color: rgba(248,113,113,0.4); color: #fca5a5; }
+
+    /* ═══════════════════════════════════════════════════════════════
+       INSTRUCTIONS TOUR
+    ═══════════════════════════════════════════════════════════════ */
+
+    /* Header button */
+    .btn-instructions {
+      display: flex; align-items: center; gap: 7px;
+      padding: 7px 15px;
+      border-radius: 9px;
+      border: 1px solid rgba(99, 102, 241, 0.35);
+      background: rgba(79, 70, 229, 0.10);
+      color: #a5b4fc;
+      font-size: 0.76rem;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      flex-shrink: 0;
+    }
+    .btn-instructions:hover {
+      background: rgba(79, 70, 229, 0.22);
+      border-color: rgba(99, 102, 241, 0.6);
+      color: #c7d2fe;
+    }
+    .btn-instructions svg { width: 15px; height: 15px; fill: currentColor; flex-shrink: 0; }
+
+    /* Backdrop — full-screen click-blocker behind the spotlight */
+    #tour-backdrop {
+      display: none;
+      position: fixed; inset: 0;
+      z-index: 18900;
+      cursor: default;
+    }
+    #tour-backdrop.active { display: block; }
+
+    /* Spotlight — transparent box that creates a dark surround via box-shadow */
+    #tour-spotlight {
+      position: fixed;
+      z-index: 18950;
+      pointer-events: none;
+      border-radius: 10px;
+      box-shadow: 0 0 0 9999px rgba(3, 4, 18, 0.80);
+      outline: 2px solid rgba(99, 102, 241, 0.55);
+      outline-offset: 2px;
+      opacity: 0;
+      transition:
+        top    0.30s cubic-bezier(.4,0,.2,1),
+        left   0.30s cubic-bezier(.4,0,.2,1),
+        width  0.30s cubic-bezier(.4,0,.2,1),
+        height 0.30s cubic-bezier(.4,0,.2,1),
+        opacity 0.20s ease;
+    }
+
+    /* Tour card */
+    #tour-card {
+      display: none;
+      position: fixed;
+      z-index: 19000;
+      width: 330px;
+      flex-direction: column;
+      gap: 13px;
+      padding: 22px 22px 18px;
+      border-radius: 16px;
+      border: 1px solid rgba(99, 102, 241, 0.30);
+      background: linear-gradient(145deg, rgba(14, 16, 40, 0.98) 0%, rgba(9, 11, 26, 0.98) 100%);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(99, 102, 241, 0.10);
+      backdrop-filter: blur(20px);
+      transition: top 0.30s cubic-bezier(.4,0,.2,1), left 0.30s cubic-bezier(.4,0,.2,1);
+    }
+    #tour-card.active { display: flex; }
+
+    /* Directional arrow on the card */
+    #tour-card::before {
+      content: '';
+      position: absolute;
+      width: 11px; height: 11px;
+      background: rgba(14, 16, 40, 0.98);
+      border: 1px solid rgba(99, 102, 241, 0.30);
+    }
+    #tour-card.arrow-left::before   { left: -6px;   top: 24px; border-right: none; border-top: none;    transform: rotate(45deg); }
+    #tour-card.arrow-right::before  { right: -6px;  top: 24px; border-left: none;  border-bottom: none; transform: rotate(45deg); }
+    #tour-card.arrow-top::before    { top: -6px;    left: 22px; border-right: none; border-bottom: none; transform: rotate(45deg); }
+    #tour-card.arrow-bottom::before { bottom: -6px; left: 22px; border-left: none;  border-top: none;    transform: rotate(45deg); }
+
+    /* Card internals */
+    .tour-step-meta {
+      font-size: 0.64rem; font-weight: 800;
+      color: #6366f1; letter-spacing: 0.10em; text-transform: uppercase;
+    }
+    .tour-card-title {
+      font-size: 0.95rem; font-weight: 700; color: #e2e8f0; line-height: 1.3;
+    }
+    .tour-card-body {
+      font-size: 0.78rem; color: #94a3b8; line-height: 1.65;
+    }
+    .tour-card-body strong { color: #c7d2fe; }
+    .tour-card-body em     { color: #a5b4fc; font-style: normal; }
+    .tour-card-body code   { font-family: 'Consolas', monospace; font-size: 0.72rem;
+                              background: rgba(99,102,241,0.14); border-radius: 4px; padding: 1px 5px;
+                              color: #a5b4fc; }
+    .tour-card-nav {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 4px;
+    }
+    .tour-nav-right  { display: flex; gap: 8px; align-items: center; }
+    .tour-btn-skip {
+      background: none; border: none; padding: 0;
+      color: #475569; font-size: 0.70rem; cursor: pointer;
+      transition: color 0.15s;
+    }
+    .tour-btn-skip:hover { color: #94a3b8; }
+    .tour-btn-prev, .tour-btn-next {
+      padding: 7px 16px; border-radius: 8px;
+      font-size: 0.74rem; font-weight: 700; cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .tour-btn-prev {
+      background: rgba(99, 102, 241, 0.10);
+      border: 1px solid rgba(99, 102, 241, 0.28);
+      color: #818cf8;
+    }
+    .tour-btn-prev:hover { background: rgba(99, 102, 241, 0.22); }
+    .tour-btn-next {
+      background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+      border: 1px solid transparent;
+      color: #fff;
+    }
+    .tour-btn-next:hover { background: linear-gradient(135deg, #4338ca 0%, #4f46e5 100%); }
+    .tour-btn-next.done  { background: linear-gradient(135deg, #059669 0%, #10b981 100%); }
+    .tour-btn-next.done:hover { background: linear-gradient(135deg, #047857 0%, #059669 100%); }
   </style>
 </head>
 <body>
@@ -1356,24 +2012,55 @@
     </div>
   </div>
 
+  <!-- Top saving bar -->
+  <div class="rec-save-bar" id="rec-save-bar">
+    <div class="rec-save-spinner"></div>
+    <svg class="rec-save-check" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+    <div class="rec-save-label" id="rec-save-label">Saving…</div>
+    <div class="rec-save-progress"><div class="rec-save-progress-fill" id="rec-save-progress-fill"></div></div>
+    <div class="rec-save-sub" id="rec-save-sub">Converting to MP4</div>
+    <button class="rec-save-open-btn" id="rec-save-open-btn">📂 Open Saved</button>
+    <button class="rec-save-dismiss" id="rec-save-dismiss">✕</button>
+  </div>
+
   <header id="header">
     <div id="branding">
-      <div id="branding-title">Project Chimera Lite</div>
-      <div id="branding-sub">Developed by Saint Herald Faust (Ken)</div>
+      <div id="branding-title">Project Purplefinger</div>
+      <div id="branding-sub">Developed by Saint Herald Faust (Ken) · WhatsApp: 09065786976</div>
     </div>
     <div id="header-right">
+      <!-- Record session -->
+      <button id="btn-record" class="btn-record" title="Record session (video + audio)">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="12" cy="12" r="8"/>
+        </svg>
+        <span id="btn-record-label">Record</span>
+      </button>
+      <div class="rec-audio-select-wrap" id="rec-audio-wrap">
+        <select class="rec-audio-select" id="rec-audio-select" title="Audio source for recording">
+          <option value="default-mic" selected>🎤 Microphone (default)</option>
+          <option value="none">🔇 No audio</option>
+        </select>
+      </div>
+      <span class="rec-timer" id="rec-timer"><span class="rec-dot"></span><span id="rec-timer-text">00:00</span></span>
+      <!-- Instructions tour trigger -->
+      <button id="btn-instructions" class="btn-instructions">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/>
+        </svg>
+        Instructions
+      </button>
       <div class="shield-wrap">
-        <button id="btn-privacy-shield" class="nav-icon-btn shield-active" title="">
+        <button id="btn-privacy-shield" class="nav-icon-btn shield-active" title="Toggle privacy shield">
           <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
         </button>
-        <div class="shield-tooltip">
-          <div class="shield-tooltip-title">🛡️ Privacy Shield</div>
-          <div class="shield-tooltip-body">
-            Automatically <strong>hides the video feed</strong> when your connection quality drops too low — preventing frozen or glitched frames from exposing your real face.
-          </div>
-          <div id="shield-tooltip-status" class="shield-tooltip-status">● Currently ON</div>
-        </div>
+        <span class="shield-label">
+          <span class="shield-label-name">Privacy Shield</span>
+          <span class="shield-label-desc">Hides video on poor connection</span>
+          <span id="shield-tooltip-status" class="shield-tooltip-status">● ON</span>
+        </span>
       </div>
+      <span class="vc-header-badge" id="vc-header-badge">🎙 Studio Active</span>
       <button id="btn-notif-bell" class="nav-icon-btn" title="Notifications">
         <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C10.9 2 10 2.9 10 4C10 4.08 10.01 4.16 10.02 4.24C7.67 4.99 6 7.27 6 10V16L4 18V19H20V18L18 16V10C18 7.27 16.33 4.99 13.98 4.24C13.99 4.16 14 4.08 14 4C14 2.9 13.1 2 12 2ZM12 22C13.1 22 14 21.1 14 20H10C10 21.1 10.9 22 12 22Z"/></svg>
         <span id="notif-badge" class="notif-badge">0</span>
@@ -1456,6 +2143,123 @@
           </button>
         </div>
         <div class="panel-copy" id="mode-summary">Realtime mode targets a lower, steadier send rate and disables face enhancement on the GPU.</div>
+      </section>
+
+      <section class="panel" id="ls-panel">
+        <div class="panel-title">🎙 LipSync Studio</div>
+        <div class="ls-subtitle">Generate speech → teleprompter lip-sync → play over your call</div>
+
+        <!-- Step 1: Voice Selection -->
+        <div class="ls-step-header">① Choose Voice</div>
+        <div class="vc-filters" id="vc-filters">
+          <button class="vc-filter-btn active" data-filter="all">All</button>
+          <button class="vc-filter-btn" data-filter="male">Male</button>
+          <button class="vc-filter-btn" data-filter="female">Female</button>
+        </div>
+        <div class="vc-filters" id="vc-accent-filters">
+          <button class="vc-filter-btn active" data-accent="all">All</button>
+          <button class="vc-filter-btn" data-accent="american">🇺🇸</button>
+          <button class="vc-filter-btn" data-accent="british">🇬🇧</button>
+          <button class="vc-filter-btn" data-accent="australian">🇦🇺</button>
+          <button class="vc-filter-btn" data-accent="indian">🇮🇳</button>
+          <button class="vc-filter-btn" data-accent="nigerian">🇳🇬</button>
+        </div>
+        <div class="vc-voice-list" id="vc-voice-list">
+          <div class="vc-empty" id="vc-empty">Loading voices...</div>
+        </div>
+
+        <!-- Step 2: Text Input -->
+        <div class="ls-step-header">② Your Script</div>
+        <textarea id="ls-text-input" class="ls-textarea" placeholder="Type what you want to say on the call...&#10;&#10;Tip: Keep it natural and conversational. Short sentences work best for lip-syncing." rows="4"></textarea>
+        <div class="ls-char-count"><span id="ls-char-count">0</span> / 5000 characters</div>
+
+        <!-- Step 3: Generate -->
+        <button id="ls-generate-btn" class="ls-generate-btn" disabled>
+          <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+          Generate Speech
+        </button>
+        <div class="ls-status" id="ls-status"></div>
+
+        <!-- Step 4: Teleprompter + Playback Controls -->
+        <div class="ls-teleprompter-wrap" id="ls-teleprompter-wrap" style="display:none;">
+          <div class="ls-step-header">③ Teleprompter — Lip-sync along!</div>
+          <div class="ls-teleprompter" id="ls-teleprompter"></div>
+          <div class="ls-playback-controls">
+            <button id="ls-play-btn" class="ls-ctrl-btn ls-play" title="Play">
+              <svg viewBox="0 0 24 24" id="ls-play-icon"><path d="M8 5v14l11-7z"/></svg>
+            </button>
+            <button id="ls-stop-btn" class="ls-ctrl-btn" title="Stop">
+              <svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+            </button>
+            <div class="ls-progress-wrap">
+              <div class="ls-progress-bar" id="ls-progress-bar"></div>
+            </div>
+            <span class="ls-time" id="ls-time">0:00 / 0:00</span>
+            <button id="ls-loop-btn" class="ls-ctrl-btn ls-loop-off" title="Loop">
+              <svg viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
+            </button>
+          </div>
+          <div class="ls-speed-row">
+            <span>Speed</span>
+            <button class="ls-speed-btn" data-speed="0.75">0.75×</button>
+            <button class="ls-speed-btn active" data-speed="1">1×</button>
+            <button class="ls-speed-btn" data-speed="1.25">1.25×</button>
+          </div>
+
+          <!-- Download audio -->
+          <button id="ls-download-btn" class="ls-download-btn" disabled>
+            <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+            Download Audio (MP3)
+          </button>
+        </div>
+
+        <!-- Voice Note Tip -->
+        <div class="ls-voicenote-tip" id="ls-voicenote-tip">
+          <span class="ls-vn-icons">💬</span>
+          <strong>Voice Note trick:</strong> Hit Play, then hold the voice-note button in
+          <strong>WhatsApp</strong> or <strong>Telegram</strong> while the audio plays through your speaker.
+          The app records your "mic" — which is actually the generated voice.
+          Instant realistic voice messages, no typing needed!
+        </div>
+
+        <!-- Audio Setup Guide -->
+        <details class="ls-guide" id="ls-guide">
+          <summary class="ls-guide-summary">📢 Audio Routing Guide — Play over your call</summary>
+          <div class="ls-guide-body">
+            <div class="ls-guide-step">
+              <div class="ls-guide-num">1</div>
+              <div>
+                <strong>Install VB-CABLE</strong> (free virtual audio cable)<br>
+                <a href="https://vb-audio.com/Cable/" target="_blank" class="ls-link">Download VB-CABLE →</a><br>
+                <span class="ls-guide-note">This creates a virtual mic that routes audio between apps.</span>
+              </div>
+            </div>
+            <div class="ls-guide-step">
+              <div class="ls-guide-num">2</div>
+              <div>
+                <strong>Set your call app's mic to "CABLE Output"</strong><br>
+                <span class="ls-guide-note">In Zoom/Google Meet/Discord → Settings → Audio → Microphone → select "CABLE Output (VB-Audio Virtual Cable)"</span>
+              </div>
+            </div>
+            <div class="ls-guide-step">
+              <div class="ls-guide-num">3</div>
+              <div>
+                <strong>Set system audio output to "CABLE Input"</strong><br>
+                <span class="ls-guide-note">Windows → Sound Settings → Output → "CABLE Input". Now any audio this app plays goes into your call as your "voice".</span>
+              </div>
+            </div>
+            <div class="ls-guide-step">
+              <div class="ls-guide-num">4</div>
+              <div>
+                <strong>Hit Play & lip-sync!</strong><br>
+                <span class="ls-guide-note">Follow the teleprompter and move your lips. The generated voice plays through your call. Your face swap handles the visual.</span>
+              </div>
+            </div>
+            <div class="ls-guide-tip">
+              💡 <strong>Pro tip:</strong> Use headphones so you can hear the teleprompter audio without it feeding back into the call. Set headphones as your "listen" device while CABLE Input remains the output device for the app.
+            </div>
+          </div>
+        </details>
       </section>
 
       <section class="panel">
@@ -1608,6 +2412,27 @@
     </div>
   </div>
 
+  <div id="key-contact-overlay">
+    <div id="key-contact-popup">
+      <div id="key-contact-topbar">
+        <div id="key-contact-title">Product Key Required</div>
+        <button id="btn-close-key-contact">✕  Close</button>
+      </div>
+      <div id="key-contact-body">
+        <div class="key-contact-message">
+          This app needs a <strong>valid product key</strong> before you can use the full system.
+          If you do not have one yet, please contact <strong>Saint H.</strong> on WhatsApp for a product key.
+        </div>
+        <div class="key-contact-meta">
+          <div class="key-contact-pill">WhatsApp: 09065786976</div>
+        </div>
+        <div class="key-contact-actions">
+          <button id="btn-open-whatsapp" class="key-contact-btn">Open WhatsApp Chat</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Tutorial / Setup Guide Overlay -->
   <div id="tutorial-overlay">
     <div id="tutorial-card">
@@ -1742,6 +2567,28 @@
           <p><a href="https://github.com/saintheraldfaust" target="_blank">github.com/saintheraldfaust</a></p>
         </div>
 
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ INSTRUCTIONS TOUR ═══════════════════════ -->
+
+  <!-- Backdrop: full-screen click-blocker; clicking it exits the tour -->
+  <div id="tour-backdrop"></div>
+
+  <!-- Spotlight: transparent box over the highlighted element; box-shadow dims everything else -->
+  <div id="tour-spotlight"></div>
+
+  <!-- Tour card: floating instruction panel -->
+  <div id="tour-card">
+    <div class="tour-step-meta">Step <span id="tour-step-num">1</span> of <span id="tour-step-total">11</span></div>
+    <div class="tour-card-title" id="tour-title">Welcome</div>
+    <div class="tour-card-body" id="tour-body"></div>
+    <div class="tour-card-nav">
+      <button class="tour-btn-skip" id="tour-btn-skip">Skip tour</button>
+      <div class="tour-nav-right">
+        <button class="tour-btn-prev" id="tour-btn-prev">← Back</button>
+        <button class="tour-btn-next" id="tour-btn-next">Next →</button>
       </div>
     </div>
   </div>

@@ -31,6 +31,7 @@ let activeSession = null; // { podId, endpoint: { ip, port }, timeoutHandle }
 let uploadedFaceBuffer = null;
 let streamProfile = 'realtime';
 let stopInFlight = null;
+const CONTACT_SAINT_H_MESSAGE = 'Your account is unavailable right now. Please contact Saint H. on WhatsApp: 09065786976.';
 
 function formatStartError(err) {
   const message = String(err?.message || 'Failed to start pod').trim();
@@ -60,12 +61,24 @@ function isValidApiToken(req) {
 
 // --- Auth Middleware ---
 async function requireAccess(req, res, next) {
+  const bearerToken = getBearerToken(req);
+  if (bearerToken) {
+    const access = await licenseStore.inspectUserSessionToken(bearerToken);
+    if (access.ok) {
+      req.auth = { type: 'license', user: access.user };
+      return next();
+    }
+    if (access.reason === 'inactive_user') {
+      return res.status(403).json({ error: CONTACT_SAINT_H_MESSAGE, code: 'ACCOUNT_DISABLED' });
+    }
+  }
+
   if (isValidApiToken(req)) {
     req.auth = { type: 'api-token' };
     return next();
   }
 
-  const user = await licenseStore.getUserBySessionToken(getBearerToken(req));
+  const user = await licenseStore.getUserBySessionToken(bearerToken);
   if (user) {
     req.auth = { type: 'license', user };
     return next();
@@ -75,11 +88,14 @@ async function requireAccess(req, res, next) {
 }
 
 async function requireLicensedUser(req, res, next) {
-  const user = await licenseStore.getUserBySessionToken(getBearerToken(req));
-  if (!user) {
+  const access = await licenseStore.inspectUserSessionToken(getBearerToken(req));
+  if (!access.ok) {
+    if (access.reason === 'inactive_user') {
+      return res.status(403).json({ error: CONTACT_SAINT_H_MESSAGE, code: 'ACCOUNT_DISABLED' });
+    }
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  req.licenseUser = user;
+  req.licenseUser = access.user;
   next();
 }
 
@@ -112,13 +128,16 @@ app.post('/auth/product-login', async (req, res) => {
   if (!productKey) {
     return res.status(400).json({ error: 'productKey is required' });
   }
+  const candidate = await licenseStore.getUserByProductKey(productKey);
+  if (candidate && !candidate.active) {
+    return res.status(403).json({ error: CONTACT_SAINT_H_MESSAGE, code: 'ACCOUNT_DISABLED' });
+  }
   try {
     const session = await licenseStore.createUserSession(productKey);
     res.json({
       ok: true,
       token: session.token,
       expiresInSec: session.expiresInSec,
-      apiToken: config.API_TOKEN,
       user: {
         id: session.user._id,
         name: session.user.name,
@@ -409,6 +428,214 @@ app.post('/upload-face', requireAccess, upload.single('face'), async (req, res) 
 
   res.json({ ok: true, forwarded: !!(session && session.serverReady) });
 });
+
+// --- ElevenLabs Voice Changer ---
+
+// In-memory voice cache (refreshed every 30 min)
+let _voiceCache = null;
+let _voiceCacheAt = 0;
+const VOICE_CACHE_TTL = 30 * 60 * 1000;
+
+// GET /voices — list ElevenLabs premade voices with gender/accent metadata
+app.get('/voices', requireAccess, async (req, res) => {
+  if (!config.ELEVENLABS_API_KEY) {
+    return res.status(503).json({ error: 'Voice changer not configured (missing ElevenLabs API key)' });
+  }
+
+  const now = Date.now();
+  if (_voiceCache && (now - _voiceCacheAt) < VOICE_CACHE_TTL) {
+    return res.json({ ok: true, voices: _voiceCache });
+  }
+
+  try {
+    // Fetch all voices from ElevenLabs v1 API (no pagination, returns all at once)
+    const resp = await axios.get('https://api.elevenlabs.io/v1/voices', {
+      headers: { 'xi-api-key': config.ELEVENLABS_API_KEY },
+      timeout: 15000,
+    });
+    const allVoices = resp.data?.voices || [];
+
+    // Flatten into a clean list the client needs
+    const voices = allVoices.map(v => ({
+      voice_id:    v.voice_id,
+      name:        v.name,
+      gender:      (v.labels?.gender || '').toLowerCase(),
+      accent:      (v.labels?.accent || '').toLowerCase(),
+      age:         (v.labels?.age || '').toLowerCase(),
+      description: v.labels?.description || v.description || '',
+      use_case:    (v.labels?.use_case || '').toLowerCase(),
+      preview_url: v.preview_url || '',
+    })).filter(v => v.voice_id && v.name);
+
+    _voiceCache = voices;
+    _voiceCacheAt = now;
+    res.json({ ok: true, voices });
+  } catch (err) {
+    console.error('ElevenLabs /voices error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch voices from ElevenLabs' });
+  }
+});
+
+// POST /voice-convert — accept audio chunk, convert via ElevenLabs STS streaming, return converted audio
+app.post('/voice-convert', requireAccess, upload.single('audio'), async (req, res) => {
+  if (!config.ELEVENLABS_API_KEY) {
+    return res.status(503).json({ error: 'Voice changer not configured' });
+  }
+
+  const voiceId = String(req.body?.voice_id || '').trim();
+  if (!voiceId) {
+    return res.status(400).json({ error: 'voice_id is required' });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: 'No audio file uploaded' });
+  }
+
+  try {
+    const form = new FormData();
+    form.append('audio', req.file.buffer, {
+      filename: 'chunk.webm',
+      contentType: req.file.mimetype || 'audio/webm',
+    });
+    form.append('model_id', 'eleven_multilingual_sts_v2');
+    form.append('voice_settings', JSON.stringify({
+      stability: 0.35,
+      similarity_boost: 0.8,
+      style: 0.0,
+      use_speaker_boost: false,
+    }));
+
+    // Stream the response back to client in real time
+    const stsResp = await axios.post(
+      `https://api.elevenlabs.io/v1/speech-to-speech/${voiceId}/stream?output_format=mp3_22050_32&optimize_streaming_latency=4`,
+      form,
+      {
+        headers: {
+          ...form.getHeaders(),
+          'xi-api-key': config.ELEVENLABS_API_KEY,
+        },
+        responseType: 'stream',
+        timeout: 15000,
+      },
+    );
+
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Transfer-Encoding': 'chunked',
+    });
+    stsResp.data.pipe(res);
+  } catch (err) {
+    const status = err?.response?.status || 502;
+    let msg = err.message;
+    if (err?.response?.data) {
+      try {
+        // When responseType is 'stream', error data may be a stream or buffer
+        if (Buffer.isBuffer(err.response.data)) {
+          msg = err.response.data.toString('utf8').slice(0, 300);
+        } else if (typeof err.response.data === 'string') {
+          msg = err.response.data.slice(0, 300);
+        } else if (typeof err.response.data.read === 'function') {
+          const chunks = [];
+          for await (const c of err.response.data) chunks.push(c);
+          msg = Buffer.concat(chunks).toString('utf8').slice(0, 300);
+        }
+      } catch (_) {}
+    }
+    console.error('ElevenLabs STS error:', msg);
+    if (!res.headersSent) {
+      res.status(status).json({ error: 'Voice conversion failed: ' + msg });
+    }
+  }
+});
+
+// POST /tts-generate — Generate TTS audio with word-level timestamps for teleprompter
+app.post('/tts-generate', requireAccess, async (req, res) => {
+  if (!config.ELEVENLABS_API_KEY) {
+    return res.status(503).json({ error: 'ElevenLabs not configured' });
+  }
+
+  const { text, voice_id, model_id } = req.body || {};
+  if (!text || !voice_id) {
+    return res.status(400).json({ error: 'text and voice_id are required' });
+  }
+
+  try {
+    const ttsResp = await axios.post(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voice_id}/with-timestamps?output_format=mp3_44100_128`,
+      {
+        text,
+        model_id: model_id || 'eleven_multilingual_v2',
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75,
+          style: 0.0,
+          use_speaker_boost: true,
+        },
+      },
+      {
+        headers: {
+          'xi-api-key': config.ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        timeout: 60000,
+      },
+    );
+
+    const { audio_base64, alignment, normalized_alignment } = ttsResp.data;
+
+    // Build word-level timing from character-level data
+    const words = _buildWordTimings(text, alignment || normalized_alignment);
+
+    res.json({
+      ok: true,
+      audio_base64,
+      words,
+      duration: words.length > 0 ? words[words.length - 1].end : 0,
+    });
+  } catch (err) {
+    const status = err?.response?.status || 502;
+    let msg = err.message;
+    try {
+      if (err?.response?.data) {
+        msg = typeof err.response.data === 'string'
+          ? err.response.data.slice(0, 400)
+          : JSON.stringify(err.response.data).slice(0, 400);
+      }
+    } catch (_) {}
+    console.error('ElevenLabs TTS error:', msg);
+    res.status(status).json({ error: 'TTS generation failed: ' + msg });
+  }
+});
+
+// Build word-level timing from character-level alignment
+function _buildWordTimings(text, alignment) {
+  if (!alignment || !alignment.characters) return [];
+
+  const chars = alignment.characters;
+  const starts = alignment.character_start_times_seconds;
+  const ends = alignment.character_end_times_seconds;
+  const words = [];
+  let wordStart = -1;
+  let wordChars = '';
+
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t') {
+      if (wordChars.length > 0) {
+        words.push({ word: wordChars, start: wordStart, end: ends[i - 1] });
+        wordChars = '';
+        wordStart = -1;
+      }
+    } else {
+      if (wordStart < 0) wordStart = starts[i];
+      wordChars += ch;
+    }
+  }
+  // Last word
+  if (wordChars.length > 0 && wordStart >= 0) {
+    words.push({ word: wordChars, start: wordStart, end: ends[chars.length - 1] });
+  }
+  return words;
+}
 
 // --- Helpers ---
 

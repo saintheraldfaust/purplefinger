@@ -10,6 +10,9 @@ const btnLicenseLogin = document.getElementById('btn-license-login');
 const btnLicenseLogout = document.getElementById('btn-license-logout');
 const btnNotifBell    = document.getElementById('btn-notif-bell');
 const btnCloseNotif   = document.getElementById('btn-close-notif');
+const keyContactOverlay = document.getElementById('key-contact-overlay');
+const btnCloseKeyContact = document.getElementById('btn-close-key-contact');
+const btnOpenWhatsapp = document.getElementById('btn-open-whatsapp');
 const notifBadge      = document.getElementById('notif-badge');
 const notifOverlay    = document.getElementById('notif-overlay');
 const notifPopupBody  = document.getElementById('notif-popup-body');
@@ -75,6 +78,11 @@ const shieldSub       = document.getElementById('shield-sub');
 const shieldScore     = document.getElementById('shield-score');
 const btnPrivacyShield = document.getElementById('btn-privacy-shield');
 const modeSummary     = document.getElementById('mode-summary');
+const audioMeter      = document.getElementById('audio-meter');
+const meterBars       = Array.from(document.querySelectorAll('.meter-bar'));
+const btnInstructions = document.getElementById('btn-instructions');
+
+// LipSync Studio DOM (loaded later in the studio section)
 
 function setStatus(text, cls) {
   statusBadge.textContent = text;
@@ -166,6 +174,7 @@ function applyConfigToUI(config) {
 
 let licenseLoggedIn = false;
 let licenseUser = null;
+let keyContactPopupShown = false;
 
 function setLicenseStatus(text) {
   if (licenseStatus) licenseStatus.textContent = text;
@@ -173,6 +182,25 @@ function setLicenseStatus(text) {
 
 function isSessionUnlocked() {
   return licenseLoggedIn || !!String(cfgApiToken?.value || '').trim();
+}
+
+function showKeyContactPopup(force = false) {
+  if (!keyContactOverlay) return;
+  if (keyContactPopupShown && !force) return;
+  keyContactPopupShown = true;
+  keyContactOverlay.classList.add('visible');
+}
+
+function hideKeyContactPopup() {
+  if (!keyContactOverlay) return;
+  keyContactOverlay.classList.remove('visible');
+}
+
+function maybeShowKeyContactPopup(message) {
+  const text = String(message || '');
+  if (/contact saint h|whatsapp: 09065786976|account is unavailable/i.test(text)) {
+    showKeyContactPopup(true);
+  }
 }
 
 function updateLicenseUI() {
@@ -190,6 +218,41 @@ function updateLicenseUI() {
   } else {
     setLicenseStatus('⛔ Not logged in. Enter product key to unlock.');
   }
+}
+
+if (btnCloseKeyContact) {
+  btnCloseKeyContact.addEventListener('click', hideKeyContactPopup);
+}
+
+if (keyContactOverlay) {
+  keyContactOverlay.addEventListener('click', (e) => {
+    if (e.target === keyContactOverlay) hideKeyContactPopup();
+  });
+}
+
+if (btnOpenWhatsapp) {
+  btnOpenWhatsapp.addEventListener('click', async () => {
+    const url = 'https://wa.me/2349065786976?text=Hi%20Saint%20H.%20I%20need%20a%20product%20key%20for%20Project%20Purplefinger.';
+    try {
+      if (window.chimera?.openExternal) {
+        const result = await window.chimera.openExternal(url);
+        if (result && result.ok === false) throw new Error(result.error || 'Unable to launch WhatsApp');
+      } else {
+        throw new Error('External opener unavailable');
+      }
+    } catch (err) {
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(`${url}\nWhatsApp: 09065786976`);
+          setLog('WhatsApp link copied. Open it manually or message 09065786976.');
+        } else {
+          setLog('Open WhatsApp manually: 09065786976');
+        }
+      } catch (_) {
+        setLog('Open WhatsApp manually: 09065786976');
+      }
+    }
+  });
 }
 
 // --- Notification sound (short chime via Web Audio API) ---
@@ -308,6 +371,509 @@ function stopAudioMeter() {
   // Reset bars
   meterBars.forEach(b => { if (b) { b.style.height = '3px'; b.style.background = '#34d399'; } });
 }
+
+// ═══════════════════════════════════════════════════════════════
+// LIPSYNC STUDIO — ElevenLabs TTS with karaoke teleprompter
+// User enters text → picks voice → generates audio with word
+// timestamps → plays back with synchronized word highlighting
+// so they can lip-sync on a video call.
+// ═══════════════════════════════════════════════════════════════
+
+let _vcVoices       = [];       // full voice catalog from ElevenLabs
+let _vcVoiceId      = null;
+let _vcGenderFilter = 'all';
+let _vcAccentFilter = 'all';
+let _vcPreviewAudio = null;
+
+// LipSync Studio state
+let _lsAudioCtx     = null;     // AudioContext for playback
+let _lsSourceNode   = null;     // current BufferSourceNode
+let _lsAudioBuffer  = null;     // decoded AudioBuffer
+let _lsAudioBytes   = null;     // raw MP3 bytes (Uint8Array) for download
+let _lsWords        = [];       // [{word, start, end}, ...]
+let _lsDuration     = 0;
+let _lsPlaying      = false;
+let _lsPaused       = false;
+let _lsStartTime    = 0;        // audioCtx.currentTime when play started
+let _lsPauseOffset  = 0;        // seconds into track when paused
+let _lsLoop         = false;
+let _lsSpeed        = 1;
+let _lsAnimFrame    = null;
+let _lsGenerating   = false;
+
+// DOM refs — LipSync Studio
+const lsTextInput       = document.getElementById('ls-text-input');
+const lsCharCount       = document.getElementById('ls-char-count');
+const lsGenerateBtn     = document.getElementById('ls-generate-btn');
+const lsStatus          = document.getElementById('ls-status');
+const lsTeleprompterWrap = document.getElementById('ls-teleprompter-wrap');
+const lsTeleprompter    = document.getElementById('ls-teleprompter');
+const lsPlayBtn         = document.getElementById('ls-play-btn');
+const lsPlayIcon        = document.getElementById('ls-play-icon');
+const lsStopBtn         = document.getElementById('ls-stop-btn');
+const lsLoopBtn         = document.getElementById('ls-loop-btn');
+const lsProgressBar     = document.getElementById('ls-progress-bar');
+const lsTime            = document.getElementById('ls-time');
+const lsDownloadBtn     = document.getElementById('ls-download-btn');
+const lsVoiceNoteTip    = document.getElementById('ls-voicenote-tip');
+const vcVoiceList       = document.getElementById('vc-voice-list');
+const vcEmpty           = document.getElementById('vc-empty');
+const vcHeaderBadge     = document.getElementById('vc-header-badge');
+const vcFilters         = document.getElementById('vc-filters');
+const vcAccentFilters   = document.getElementById('vc-accent-filters');
+
+// --- Load voices from backend ---
+// Special featured voices (from ElevenLabs shared library — usable by voice_id directly)
+const _SPECIAL_VOICES = [
+  {
+    voice_id: 'zSSZ9gJu9KsDvWdoSFFN',
+    name: 'Elon Musk',
+    gender: 'male',
+    accent: 'american',
+    age: 'young',
+    description: 'Custom clone – natural & conversational',
+    preview_url: '',
+    _special: true,
+    _badge: '⭐',
+    _label: 'FEATURED',
+  },
+];
+
+async function loadVoices() {
+  if (vcEmpty) vcEmpty.textContent = 'Loading voices...';
+  try {
+    const data = await window.chimera.getVoices();
+    // Prepend special voices, then regular ones
+    _vcVoices = [..._SPECIAL_VOICES, ...(data.voices || [])];
+    // Auto-select Elon voice by default
+    if (!_vcVoiceId) _vcVoiceId = 'zSSZ9gJu9KsDvWdoSFFN';
+    renderVoiceList();
+    _updateGenerateBtn();
+  } catch (err) {
+    console.error('Failed to load voices:', err);
+    maybeShowKeyContactPopup(err.message);
+    if (vcEmpty) vcEmpty.textContent = err.message || 'Failed to load voices.';
+  }
+}
+
+// --- Render filtered voice list ---
+function renderVoiceList() {
+  if (!vcVoiceList) return;
+  const filtered = _vcVoices.filter(v => {
+    if (_vcGenderFilter !== 'all' && v.gender !== _vcGenderFilter) return false;
+    if (_vcAccentFilter !== 'all' && !v.accent.includes(_vcAccentFilter)) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    vcVoiceList.innerHTML = '<div class="vc-empty">No voices match these filters.</div>';
+    return;
+  }
+
+  vcVoiceList.innerHTML = filtered.map(v => {
+    const genderClass = v.gender === 'male' ? 'male' : v.gender === 'female' ? 'female' : 'other';
+    const initials = v.name.slice(0, 2).toUpperCase();
+    const accent = v.accent ? v.accent.charAt(0).toUpperCase() + v.accent.slice(1) : '';
+    const meta = [v.gender ? v.gender.charAt(0).toUpperCase() + v.gender.slice(1) : '', accent, v.age, v.description].filter(Boolean).join(' · ');
+    const selected = v.voice_id === _vcVoiceId ? ' selected' : '';
+    const special = v._special ? ' special' : '';
+    const badge = v._special ? `<span class="vc-voice-badge">${v._badge} ${v._label}</span>` : '';
+    return `
+      <div class="vc-voice-card${selected}${special}" data-voice-id="${v.voice_id}">
+        <div class="vc-voice-avatar ${genderClass}">${initials}</div>
+        <div class="vc-voice-info">
+          <div class="vc-voice-name">${v.name}${badge}</div>
+          <div class="vc-voice-meta">${meta}</div>
+        </div>
+        ${v.preview_url ? `<button class="vc-voice-preview" data-preview="${v.preview_url}" title="Preview voice"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  _updateGenerateBtn();
+}
+
+// --- Event delegation for voice list ---
+if (vcVoiceList) {
+  vcVoiceList.addEventListener('click', (e) => {
+    const previewBtn = e.target.closest('.vc-voice-preview');
+    if (previewBtn) {
+      e.stopPropagation();
+      const url = previewBtn.dataset.preview;
+      if (url) playVoicePreview(url);
+      return;
+    }
+    const card = e.target.closest('.vc-voice-card');
+    if (card) {
+      _vcVoiceId = card.dataset.voiceId;
+      vcVoiceList.querySelectorAll('.vc-voice-card').forEach(c => c.classList.toggle('selected', c === card));
+      _updateGenerateBtn();
+    }
+  });
+}
+
+// --- Filter buttons ---
+if (vcFilters) {
+  vcFilters.addEventListener('click', (e) => {
+    const btn = e.target.closest('.vc-filter-btn');
+    if (!btn) return;
+    _vcGenderFilter = btn.dataset.filter;
+    vcFilters.querySelectorAll('.vc-filter-btn').forEach(b => b.classList.toggle('active', b === btn));
+    renderVoiceList();
+  });
+}
+if (vcAccentFilters) {
+  vcAccentFilters.addEventListener('click', (e) => {
+    const btn = e.target.closest('.vc-filter-btn');
+    if (!btn) return;
+    _vcAccentFilter = btn.dataset.accent;
+    vcAccentFilters.querySelectorAll('.vc-filter-btn').forEach(b => b.classList.toggle('active', b === btn));
+    renderVoiceList();
+  });
+}
+
+// --- Preview voice sample ---
+function playVoicePreview(url) {
+  if (_vcPreviewAudio) { _vcPreviewAudio.pause(); _vcPreviewAudio = null; }
+  _vcPreviewAudio = new Audio(url);
+  _vcPreviewAudio.volume = 0.7;
+  _vcPreviewAudio.play().catch(() => {});
+  _vcPreviewAudio.onended = () => { _vcPreviewAudio = null; };
+}
+
+// --- Char count on textarea ---
+if (lsTextInput) {
+  lsTextInput.addEventListener('input', () => {
+    if (lsCharCount) lsCharCount.textContent = lsTextInput.value.length;
+    _updateGenerateBtn();
+  });
+}
+
+// --- Enable/disable generate button based on state ---
+function _updateGenerateBtn() {
+  if (!lsGenerateBtn) return;
+  const hasText = lsTextInput && lsTextInput.value.trim().length > 0;
+  const hasVoice = !!_vcVoiceId;
+  lsGenerateBtn.disabled = !hasText || !hasVoice || _lsGenerating;
+}
+
+// --- Generate TTS ---
+if (lsGenerateBtn) {
+  lsGenerateBtn.addEventListener('click', async () => {
+    const text = lsTextInput ? lsTextInput.value.trim() : '';
+    if (!text || !_vcVoiceId || _lsGenerating) return;
+
+    // Stop any current playback
+    _lsStop();
+
+    _lsGenerating = true;
+    lsGenerateBtn.disabled = true;
+    lsGenerateBtn.classList.add('generating');
+    lsGenerateBtn.innerHTML = '<svg class="spin" viewBox="0 0 24 24"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg> Generating...';
+    if (lsStatus) lsStatus.textContent = 'Sending to ElevenLabs...';
+
+    try {
+      const result = await window.chimera.ttsGenerate(text, _vcVoiceId);
+      if (!result || !result.ok) {
+        throw new Error(result?.error || 'Generation failed');
+      }
+
+      if (lsStatus) lsStatus.textContent = 'Decoding audio...';
+
+      // Decode base64 audio
+      const binaryStr = atob(result.audio_base64);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+      // Keep raw bytes for download
+      _lsAudioBytes = bytes.slice();
+
+      if (!_lsAudioCtx) _lsAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      _lsAudioBuffer = await _lsAudioCtx.decodeAudioData(bytes.buffer);
+      _lsWords = result.words || [];
+      _lsDuration = result.duration || _lsAudioBuffer.duration;
+
+      // Build teleprompter
+      _lsBuildTeleprompter();
+
+      // Show controls + enable download
+      if (lsTeleprompterWrap) lsTeleprompterWrap.style.display = '';
+      if (lsDownloadBtn) lsDownloadBtn.disabled = false;
+      if (lsVoiceNoteTip) lsVoiceNoteTip.classList.add('visible');
+      if (lsStatus) lsStatus.textContent = `Ready — ${_lsWords.length} words, ${_formatTime(_lsDuration)}`;
+      _lsUpdateTimeDisplay(0);
+
+    } catch (err) {
+      console.error('TTS generation error:', err);
+      maybeShowKeyContactPopup(err.message);
+      if (lsStatus) lsStatus.textContent = '❌ ' + (err.message || 'Generation failed');
+    } finally {
+      _lsGenerating = false;
+      lsGenerateBtn.classList.remove('generating');
+      lsGenerateBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg> Generate Speech';
+      _updateGenerateBtn();
+    }
+  });
+}
+
+// ── Build teleprompter word spans ──
+function _lsBuildTeleprompter() {
+  if (!lsTeleprompter) return;
+  lsTeleprompter.innerHTML = _lsWords.map((w, i) =>
+    `<span class="ls-word" data-idx="${i}">${_escHtml(w.word)}</span> `
+  ).join('');
+  // Cache span references so _lsTickLoop never touches querySelectorAll
+  _lsCachedSpans = Array.from(lsTeleprompter.querySelectorAll('.ls-word'));
+  _lsLastActiveIdx = -1;
+}
+
+function _escHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── Play / Pause ──
+if (lsPlayBtn) {
+  lsPlayBtn.addEventListener('click', () => {
+    if (_lsPlaying && !_lsPaused) {
+      _lsPause();
+    } else {
+      _lsPlay();
+    }
+  });
+}
+
+function _lsPlay() {
+  if (!_lsAudioBuffer || !_lsAudioCtx) return;
+
+  // Resume context if suspended
+  if (_lsAudioCtx.state === 'suspended') _lsAudioCtx.resume();
+
+  // Disconnect previous source
+  if (_lsSourceNode) { try { _lsSourceNode.stop(); } catch (_) {} }
+
+  _lsSourceNode = _lsAudioCtx.createBufferSource();
+  _lsSourceNode.buffer = _lsAudioBuffer;
+  _lsSourceNode.playbackRate.value = _lsSpeed;
+  _lsSourceNode.connect(_lsAudioCtx.destination);
+
+  // Also feed into session recorder if active
+  _recConnectLipSyncSource(_lsSourceNode);
+
+  _lsSourceNode.onended = () => {
+    if (!_lsPlaying) return;
+    if (_lsLoop) {
+      _lsPauseOffset = 0;
+      _lsPlay(); // restart
+    } else {
+      _lsStop();
+    }
+  };
+
+  _lsStartTime = _lsAudioCtx.currentTime - (_lsPauseOffset / _lsSpeed);
+  _lsSourceNode.start(0, _lsPauseOffset);
+
+  _lsPlaying = true;
+  _lsPaused = false;
+  _lsSetPlayIcon(true);
+  if (vcHeaderBadge) vcHeaderBadge.classList.add('visible');
+  _lsTickLoop();
+}
+
+function _lsPause() {
+  if (!_lsPlaying || _lsPaused) return;
+  _lsPauseOffset = (_lsAudioCtx.currentTime - _lsStartTime) * _lsSpeed;
+  if (_lsSourceNode) { try { _lsSourceNode.stop(); } catch (_) {} }
+  _lsPaused = true;
+  _lsSetPlayIcon(false);
+  if (_lsAnimFrame) { cancelAnimationFrame(_lsAnimFrame); _lsAnimFrame = null; }
+}
+
+function _lsStop() {
+  if (_lsSourceNode) { try { _lsSourceNode.stop(); } catch (_) {} _lsSourceNode = null; }
+  _lsPlaying = false;
+  _lsPaused = false;
+  _lsPauseOffset = 0;
+  _lsSetPlayIcon(false);
+  if (_lsAnimFrame) { cancelAnimationFrame(_lsAnimFrame); _lsAnimFrame = null; }
+  if (lsProgressBar) lsProgressBar.style.transform = 'scaleX(0)';
+  _lsUpdateTimeDisplay(0);
+  _lsHighlightWord(-1);
+  _lsLastActiveIdx = -1;
+  if (vcHeaderBadge) vcHeaderBadge.classList.remove('visible');
+}
+
+if (lsStopBtn) {
+  lsStopBtn.addEventListener('click', _lsStop);
+}
+
+// ── Play icon toggle (play ↔ pause) ──
+function _lsSetPlayIcon(playing) {
+  if (!lsPlayIcon) return;
+  if (playing) {
+    lsPlayIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>'; // pause
+  } else {
+    lsPlayIcon.innerHTML = '<path d="M8 5v14l11-7z"/>'; // play
+  }
+}
+
+// ── Teleprompter sync loop — runs via rAF ──
+// PERF: Cache spans, only touch DOM when active word changes.
+// Avoids querySelectorAll + classList thrash every frame that was
+// killing face-swap FPS (~60 DOM queries/s → layout recalc storms).
+let _lsCachedSpans   = [];      // cached NodeList of .ls-word spans
+let _lsLastActiveIdx = -1;      // last highlighted word index
+
+function _lsTickLoop() {
+  if (!_lsPlaying || _lsPaused) return;
+
+  const elapsed = (_lsAudioCtx.currentTime - _lsStartTime) * _lsSpeed;
+  const clamped = Math.min(elapsed, _lsDuration);
+
+  // Update progress bar — use transform instead of width to avoid layout reflow
+  if (lsProgressBar) {
+    lsProgressBar.style.transform = `scaleX(${clamped / _lsDuration})`;
+  }
+  _lsUpdateTimeDisplay(clamped);
+
+  // Find active word via binary-ish scan (words are sorted by time)
+  let activeIdx = -1;
+  for (let i = 0; i < _lsWords.length; i++) {
+    if (clamped >= _lsWords[i].start && clamped < _lsWords[i].end) {
+      activeIdx = i;
+      break;
+    }
+    if (clamped < _lsWords[i].start) break; // past all candidates
+  }
+
+  // Only touch DOM when the active word actually changes
+  if (activeIdx !== _lsLastActiveIdx) {
+    _lsHighlightWord(activeIdx);
+    _lsLastActiveIdx = activeIdx;
+  }
+
+  _lsAnimFrame = requestAnimationFrame(_lsTickLoop);
+}
+
+// ── Highlight active word, mark previous as spoken ──
+// Uses cached span list — never re-queries DOM during playback.
+function _lsHighlightWord(idx) {
+  if (!lsTeleprompter || _lsCachedSpans.length === 0) return;
+
+  // Only update the previous-active and new-active spans (not all of them)
+  const prev = _lsLastActiveIdx;
+  if (prev >= 0 && prev < _lsCachedSpans.length) {
+    _lsCachedSpans[prev].classList.remove('active');
+    _lsCachedSpans[prev].classList.add('spoken');
+  }
+
+  if (idx >= 0 && idx < _lsCachedSpans.length) {
+    // Mark everything before idx as spoken (handles seek jumps)
+    for (let i = 0; i < idx; i++) {
+      const s = _lsCachedSpans[i];
+      if (!s.classList.contains('spoken')) s.classList.add('spoken');
+      s.classList.remove('active');
+    }
+    // Mark everything after idx as not spoken (handles backward seek)
+    for (let i = idx + 1; i < _lsCachedSpans.length; i++) {
+      _lsCachedSpans[i].classList.remove('spoken', 'active');
+    }
+    _lsCachedSpans[idx].classList.remove('spoken');
+    _lsCachedSpans[idx].classList.add('active');
+
+    // Scroll only on word change, not every frame
+    _lsCachedSpans[idx].scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+  } else if (idx === -1) {
+    // Reset all
+    for (let i = 0; i < _lsCachedSpans.length; i++) {
+      _lsCachedSpans[i].classList.remove('active', 'spoken');
+    }
+  }
+}
+
+// ── Time display helper ──
+function _lsUpdateTimeDisplay(current) {
+  if (lsTime) lsTime.textContent = `${_formatTime(current)} / ${_formatTime(_lsDuration)}`;
+}
+
+function _formatTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+// ── Progress bar click-to-seek ──
+const lsProgressWrap = document.querySelector('.ls-progress-wrap');
+if (lsProgressWrap) {
+  lsProgressWrap.addEventListener('click', (e) => {
+    if (!_lsAudioBuffer) return;
+    const rect = lsProgressWrap.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const seekTo = pct * _lsDuration;
+    _lsPauseOffset = seekTo;
+    if (_lsPlaying && !_lsPaused) {
+      // Restart from new position
+      _lsPlay();
+    } else {
+      // Update display without playing
+      if (lsProgressBar) lsProgressBar.style.transform = `scaleX(${pct})`;
+      _lsUpdateTimeDisplay(seekTo);
+    }
+  });
+}
+
+// ── Loop button ──
+if (lsLoopBtn) {
+  lsLoopBtn.addEventListener('click', () => {
+    _lsLoop = !_lsLoop;
+    lsLoopBtn.classList.toggle('ls-loop-on', _lsLoop);
+    lsLoopBtn.classList.toggle('ls-loop-off', !_lsLoop);
+  });
+}
+
+// ── Speed buttons ──
+document.querySelectorAll('.ls-speed-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    _lsSpeed = parseFloat(btn.dataset.speed) || 1;
+    document.querySelectorAll('.ls-speed-btn').forEach(b => b.classList.toggle('active', b === btn));
+    if (_lsSourceNode && _lsPlaying && !_lsPaused) {
+      _lsSourceNode.playbackRate.value = _lsSpeed;
+    }
+  });
+});
+
+// ── Download audio button ──
+if (lsDownloadBtn) {
+  lsDownloadBtn.addEventListener('click', () => {
+    if (!_lsAudioBytes) return;
+    const blob = new Blob([_lsAudioBytes], { type: 'audio/mpeg' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.href = url;
+    a.download = `chimera-voice-${ts}.mp3`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    setLog('Audio downloaded → chimera-voice-' + ts + '.mp3');
+  });
+}
+
+// ── Cleanup helper called from stopStreaming ──
+function stopVoiceChanger() {
+  _lsStop();
+}
+
+function getVoiceName(voiceId) {
+  const v = _vcVoices.find(v => v.voice_id === voiceId);
+  return v ? v.name : 'Unknown';
+}
+
+// Load voices on startup
+loadVoices();
+
+// ═══════════════════════════════════════════════════════════════
+
 let _unreadCount = 0;
 
 function updateNotifBadge(count) {
@@ -440,6 +1006,275 @@ async function runLaunchSequence() {
   launchOverlay.classList.add('hidden');
 }
 
+// ═══════════════════════════════════════════════════════════════
+//   SESSION RECORDING (video from remoteCanvas + optional audio)
+// ═══════════════════════════════════════════════════════════════
+const btnRecord     = document.getElementById('btn-record');
+const btnRecordLabel = document.getElementById('btn-record-label');
+const recTimer      = document.getElementById('rec-timer');
+const recTimerText  = document.getElementById('rec-timer-text');
+const recAudioWrap  = document.getElementById('rec-audio-wrap');
+const recAudioSelect = document.getElementById('rec-audio-select');
+
+let _recMediaRecorder = null;
+let _recChunks        = [];
+let _recStartedAt     = 0;
+let _recTimerInterval = null;
+let _recAudioDest     = null;  // MediaStreamAudioDestination
+let _recLipSyncMediaNode = null;
+
+// Populate audio output devices for recording source
+async function _recPopulateAudioDevices() {
+  try {
+    // Request mic permission so labels are available
+    try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach(t => t.stop()); } catch (_) {}
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter(d => d.kind === 'audioinput' && d.deviceId);
+    // Keep the first two built-in options (default-mic, none)
+    while (recAudioSelect.options.length > 2) recAudioSelect.remove(2);
+    for (const dev of audioInputs) {
+      const opt = document.createElement('option');
+      opt.value = 'device:' + dev.deviceId;
+      opt.textContent = '🎙 ' + (dev.label || 'Mic ' + dev.deviceId.slice(0, 6));
+      recAudioSelect.appendChild(opt);
+    }
+  } catch (_) {}
+}
+
+function _recFormatTime(seconds) {
+  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+// Beep N times using AudioContext oscillator
+function _recBeep(times) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    let t = ctx.currentTime;
+    for (let i = 0; i < times; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      gain.gain.value = 0.25;
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.12);
+      t += 0.22;
+    }
+    setTimeout(() => ctx.close(), (times * 0.22 + 0.5) * 1000);
+  } catch (_) {}
+}
+
+function _recStartTimer() {
+  _recStartedAt = Date.now();
+  recTimer.classList.add('visible');
+  recTimerText.textContent = '00:00';
+  _recTimerInterval = setInterval(() => {
+    recTimerText.textContent = _recFormatTime((Date.now() - _recStartedAt) / 1000);
+  }, 500);
+}
+
+function _recStopTimer() {
+  clearInterval(_recTimerInterval);
+  _recTimerInterval = null;
+  recTimer.classList.remove('visible');
+}
+
+async function _recStart() {
+  if (_recMediaRecorder && _recMediaRecorder.state !== 'inactive') return;
+
+  // 1. Get video stream from the remote canvas (the face-swapped output)
+  const canvasStream = remoteCanvas.captureStream(30);
+
+  // 2. Build an audio track depending on selector value
+  const audioChoice = recAudioSelect.value;
+  let combinedStream = canvasStream;
+
+  if (audioChoice === 'default-mic') {
+    // Capture from the system default microphone
+    try {
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      combinedStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...micStream.getAudioTracks(),
+      ]);
+    } catch (e) {
+      console.warn('[Rec] Failed to capture default mic:', e);
+    }
+  } else if (audioChoice === 'lipsync' && _lsAudioCtx) {
+    // Tap into the LipSync AudioContext destination
+    _recAudioDest = _lsAudioCtx.createMediaStreamDestination();
+    const audioTrack = _recAudioDest.stream.getAudioTracks()[0];
+    if (audioTrack) {
+      combinedStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        audioTrack,
+      ]);
+    }
+  } else if (audioChoice.startsWith('device:')) {
+    // Capture from a specific input device
+    const deviceId = audioChoice.replace('device:', '');
+    try {
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { deviceId: { exact: deviceId } },
+        video: false,
+      });
+      combinedStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...micStream.getAudioTracks(),
+      ]);
+    } catch (e) {
+      console.warn('[Rec] Failed to capture audio device:', e);
+    }
+  }
+  // else audioChoice === 'none' → video-only
+
+  // 3. Create MediaRecorder
+  const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+    ? 'video/webm;codecs=vp9,opus'
+    : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+      ? 'video/webm;codecs=vp8,opus'
+      : 'video/webm';
+
+  _recChunks = [];
+  _recMediaRecorder = new MediaRecorder(combinedStream, {
+    mimeType,
+    videoBitsPerSecond: 2_500_000,
+  });
+
+  _recMediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) _recChunks.push(e.data);
+  };
+
+  _recMediaRecorder.onstop = async () => {
+    const blob = new Blob(_recChunks, { type: mimeType });
+    _recChunks = [];
+    _recStopTimer();
+    _recUpdateUI(false);
+
+    const saveBar      = document.getElementById('rec-save-bar');
+    const saveLabel    = document.getElementById('rec-save-label');
+    const saveSub      = document.getElementById('rec-save-sub');
+    const saveFill     = document.getElementById('rec-save-progress-fill');
+    const saveOpenBtn  = document.getElementById('rec-save-open-btn');
+    const saveDismiss  = document.getElementById('rec-save-dismiss');
+
+    // Reset bar state
+    if (saveBar) { saveBar.classList.remove('done'); saveBar.classList.add('visible'); }
+    if (saveLabel) saveLabel.textContent = 'Saving…';
+    if (saveSub) saveSub.textContent = 'Converting to MP4';
+    if (saveFill) saveFill.style.width = '0%';
+
+    // Fake progress animation
+    let pct = 0;
+    const progressIv = setInterval(() => {
+      pct = Math.min(pct + Math.random() * 12, 90);
+      if (saveFill) saveFill.style.width = pct + '%';
+    }, 400);
+
+    // Dismiss handler
+    const dismissBar = () => { if (saveBar) { saveBar.classList.remove('visible', 'done'); } };
+    if (saveDismiss) saveDismiss.onclick = dismissBar;
+
+    // Convert to ArrayBuffer and send to main process for Save dialog
+    let savedPath = null;
+    try {
+      const buffer = await blob.arrayBuffer();
+      const result = await window.chimera.saveRecording(buffer);
+      clearInterval(progressIv);
+
+      if (result.ok) {
+        savedPath = result.path;
+        if (saveFill) saveFill.style.width = '100%';
+        if (saveLabel) saveLabel.textContent = 'Saved!';
+        if (saveSub) saveSub.textContent = result.path;
+        if (saveBar) saveBar.classList.add('done');
+        const note = result.note ? ` (${result.note})` : '';
+        setLog('Recording saved → ' + result.path + note);
+
+        // Beep 3 times
+        _recBeep(3);
+
+        // Open Saved button
+        if (saveOpenBtn) {
+          saveOpenBtn.onclick = () => {
+            if (savedPath && window.chimera.openFile) window.chimera.openFile(savedPath);
+          };
+        }
+
+        // Auto-dismiss after 15s
+        setTimeout(dismissBar, 15000);
+      } else if (result.canceled) {
+        dismissBar();
+      } else {
+        clearInterval(progressIv);
+        if (saveLabel) saveLabel.textContent = 'Save failed';
+        if (saveSub) saveSub.textContent = result.error || 'Unknown error';
+        setLog('Recording save failed' + (result.error ? ': ' + result.error : ''));
+        setTimeout(dismissBar, 6000);
+      }
+    } catch (e) {
+      clearInterval(progressIv);
+      dismissBar();
+      console.error('[Rec] Save error:', e);
+      setLog('Recording save error: ' + e.message);
+    }
+  };
+
+  _recMediaRecorder.start(1000); // 1s timeslice
+  _recStartTimer();
+  _recUpdateUI(true);
+  recAudioWrap.classList.add('visible');
+  setLog('Recording started');
+}
+
+function _recStop() {
+  if (!_recMediaRecorder || _recMediaRecorder.state === 'inactive') return;
+  _recMediaRecorder.stop();
+  // Disconnect lipsync audio tap
+  if (_recLipSyncMediaNode) {
+    try { _recLipSyncMediaNode.disconnect(_recAudioDest); } catch (_) {}
+    _recLipSyncMediaNode = null;
+  }
+  _recAudioDest = null;
+  setLog('Stopping recording...');
+}
+
+function _recUpdateUI(recording) {
+  if (recording) {
+    btnRecord.classList.add('recording');
+    btnRecordLabel.textContent = 'Stop';
+  } else {
+    btnRecord.classList.remove('recording');
+    btnRecordLabel.textContent = 'Record';
+  }
+}
+
+// Hook into LipSync _lsSourceNode to feed audio into the recorder
+function _recConnectLipSyncSource(sourceNode) {
+  if (!_recAudioDest || recAudioSelect.value !== 'lipsync') return;
+  try {
+    sourceNode.connect(_recAudioDest);
+    _recLipSyncMediaNode = sourceNode;
+  } catch (_) {}
+}
+
+if (btnRecord) {
+  btnRecord.addEventListener('click', () => {
+    if (_recMediaRecorder && _recMediaRecorder.state === 'recording') {
+      _recStop();
+    } else {
+      _recStart();
+    }
+  });
+}
+
+// Populate audio devices on load + on device change
+_recPopulateAudioDevices();
+navigator.mediaDevices.addEventListener('devicechange', _recPopulateAudioDevices);
+
 let fBrightness = 1;
 let fContrast = 1;
 let fSaturation = 1;
@@ -473,12 +1308,14 @@ let _lightIssue      = '';
 let _lightState      = 'good';  // 'good' | 'warn' | 'block'
 let _lightConsecBad  = 0;       // consecutive probe ticks below block threshold
 let _lightConsecGood = 0;       // consecutive probe ticks above unblock threshold
+let _lightUnblockedAt = 0;      // timestamp of last unblock (grace period start)
 
 const LIGHT_BLOCK_THRESHOLD   = 48;  // score below this → start counting toward block
 const LIGHT_UNBLOCK_THRESHOLD = 64;  // score above this → start counting toward unblock
 const LIGHT_WARN_THRESHOLD    = 70;  // score below this → amber pill (but still streaming)
-const LIGHT_BAD_CONSEC        = 2;   // 2 bad ticks (~600ms) before blocking
+const LIGHT_BAD_CONSEC        = 3;   // 3 bad ticks (~900ms) before blocking
 const LIGHT_GOOD_CONSEC       = 2;   // 2 good ticks before unblocking
+const LIGHT_GRACE_MS          = 3000; // ms after unblock before re-blocking is allowed
 
 const STREAM_PROFILES = {
   realtime: {
@@ -537,9 +1374,13 @@ function _updateLightGate(score, issue, avgLuma, rN, gN, bN) {
   }
 
   if (!_lightBlocked && _lightConsecBad >= LIGHT_BAD_CONSEC) {
-    _lightBlocked = true;
+    // Only re-block after grace period has expired
+    if ((Date.now() - _lightUnblockedAt) >= LIGHT_GRACE_MS) {
+      _lightBlocked = true;
+    }
   } else if (_lightBlocked && _lightConsecGood >= LIGHT_GOOD_CONSEC) {
     _lightBlocked = false;
+    _lightUnblockedAt = Date.now();
   }
 
   _lightState = _lightBlocked ? 'block' : score < LIGHT_WARN_THRESHOLD ? 'warn' : 'good';
@@ -551,7 +1392,10 @@ function _updateLightGate(score, issue, avgLuma, rN, gN, bN) {
     if (lightOverlayIssueEl) lightOverlayIssueEl.textContent = issue || 'Adjust your lighting to resume.';
     if (lightOverlayScoreEl) lightOverlayScoreEl.textContent = `Light quality score: ${score}%`;
   } else {
-    if (lightOverlayEl) lightOverlayEl.classList.remove('visible');
+    // Only touch the DOM if it's currently visible (avoids spurious re-animation triggers)
+    if (lightOverlayEl && lightOverlayEl.classList.contains('visible')) {
+      lightOverlayEl.classList.remove('visible');
+    }
   }
 
   if (lightPillEl && lightPillEl.style.display !== 'none') {
@@ -564,12 +1408,13 @@ function _updateLightGate(score, issue, avgLuma, rN, gN, bN) {
 }
 
 function resetLightGate() {
-  _lightBlocked    = false;
-  _lightScore      = 100;
-  _lightIssue      = '';
-  _lightState      = 'good';
-  _lightConsecBad  = 0;
-  _lightConsecGood = 0;
+  _lightBlocked     = false;
+  _lightScore       = 100;
+  _lightIssue       = '';
+  _lightState       = 'good';
+  _lightConsecBad   = 0;
+  _lightConsecGood  = 0;
+  _lightUnblockedAt = 0;
   if (lightOverlayEl) lightOverlayEl.classList.remove('visible');
   if (lightPillEl)    lightPillEl.style.display = 'none';
 }
@@ -603,10 +1448,18 @@ function updateCaptureFilter() {
   const yZ1  = yMin + Math.floor((yMax - yMin) / 3);      // 6
   const yZ2  = yMin + Math.floor((yMax - yMin) * 2 / 3);  // 10
 
+  // Inner face centre zone — where the actual face sits (center ~35% × 45% of frame)
+  // Used to detect backlighting (background brighter than face)
+  const xInMin = Math.floor(W * 0.35); // 11
+  const xInMax = Math.floor(W * 0.65); // 20
+  const yInMin = Math.floor(H * 0.28); // 5
+  const yInMax = Math.floor(H * 0.72); // 12
+
   let lumaSum = 0, rSum = 0, gSum = 0, bSum = 0;
   let clipCount = 0, pixCount = 0;
   let leftLuma = 0, leftCount = 0, rightLuma = 0, rightCount = 0;
   const zLuma = [0, 0, 0], zCount = [0, 0, 0];
+  let innerLumaSum = 0, innerCount = 0;
 
   for (let y = yMin; y < yMax; y++) {
     for (let x = xMin; x < xMax; x++) {
@@ -620,6 +1473,10 @@ function updateCaptureFilter() {
       else           { rightLuma += luma; rightCount++; }
       const zi = y < yZ1 ? 0 : y < yZ2 ? 1 : 2;
       zLuma[zi] += luma; zCount[zi]++;
+      // Track face centre separately for backlight detection
+      if (x >= xInMin && x < xInMax && y >= yInMin && y < yInMax) {
+        innerLumaSum += luma; innerCount++;
+      }
     }
   }
 
@@ -669,11 +1526,24 @@ function updateCaptureFilter() {
   // Min zone (darkest face band) 0–5
   const minZoneScore  = minZoneLuma < 20 ? 0 : Math.min(5, (minZoneLuma - 20) / 20 * 5);
 
-  const score = Math.round(Math.min(100, lumaScore + castScore + shadowScore + clipScore + minZoneScore));
+  // Backlight detection: face centre darker than surrounding zone = light is behind the subject
+  const faceCenterAvg = innerCount > 0 ? innerLumaSum / innerCount : avgLuma;
+  const outerAvg = (pixCount - innerCount) > 0
+    ? (lumaSum - innerLumaSum) / (pixCount - innerCount)
+    : avgLuma;
+  // Penalty kicks in when outer zone is >20 luma units brighter than face centre
+  const backlightDiff    = Math.max(0, outerAvg - faceCenterAvg - 20);
+  const backlightPenalty = Math.min(25, backlightDiff * 0.85);
+
+  const score = Math.round(Math.min(100, Math.max(0,
+    lumaScore + castScore + shadowScore + clipScore + minZoneScore - backlightPenalty,
+  )));
 
   // Issue text — most dominant problem first
   let issue = '';
-  if (avgLuma < 55) {
+  if (backlightPenalty > 10) {
+    issue = 'Backlit — your light source is behind you, face a light instead';
+  } else if (avgLuma < 55) {
     issue = 'Room is too dark — you need more light on your face';
   } else if (avgLuma > 215) {
     issue = 'Overexposed — reduce direct light or step back from it';
@@ -1005,6 +1875,7 @@ async function doReconnect() {
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
   if (captureVideo) { captureVideo.srcObject = null; captureVideo = null; }
   localVideo.srcObject = null;
+  localVideo.classList.remove('active');
   offscreen = null;
   offCtx = null;
   gpuIp = null;
@@ -1064,7 +1935,7 @@ btnPrivacyShield.addEventListener('click', () => {
   _privacyShieldEnabled = !_privacyShieldEnabled;
   btnPrivacyShield.classList.toggle('shield-active', _privacyShieldEnabled);
   if (shieldTooltipStatus) {
-    shieldTooltipStatus.textContent = _privacyShieldEnabled ? '● Currently ON' : '● Currently OFF';
+    shieldTooltipStatus.textContent = _privacyShieldEnabled ? '● ON' : '● OFF';
     shieldTooltipStatus.classList.toggle('off', !_privacyShieldEnabled);
   }
   if (!_privacyShieldEnabled) hidePrivacyShield();
@@ -1138,6 +2009,7 @@ btnLicenseLogin.addEventListener('click', async () => {
     const result = await window.chimera.licenseLogin(key);
     licenseLoggedIn = true;
     licenseUser = result.user || null;
+    hideKeyContactPopup();
     updateLicenseUI();
     const saved = await window.chimera.saveAppConfig({
       backendUrl: cfgBackendUrl.value,
@@ -1153,6 +2025,7 @@ btnLicenseLogin.addEventListener('click', async () => {
     licenseLoggedIn = false;
     licenseUser = null;
     updateLicenseUI();
+    showKeyContactPopup(true);
     setLog(`Product key login failed: ${err.message}`);
   } finally {
     btnLicenseLogin.disabled = false;
@@ -1166,6 +2039,7 @@ btnLicenseLogout.addEventListener('click', async () => {
     licenseLoggedIn = false;
     licenseUser = null;
     updateLicenseUI();
+    showKeyContactPopup(true);
     _cachedNotifications = [];
     updateNotifBadge(0);
     renderNotificationsPopup([]);
@@ -1276,6 +2150,7 @@ async function startStreaming(ip, port) {
   });
 
   localVideo.srcObject = localStream;
+  localVideo.classList.add('active');
   camPlaceholder.style.display = 'none';
 
   // Hidden video element — OffscreenCanvas draws from this
@@ -1339,16 +2214,21 @@ function stopStreaming() {
   _captureLoopActive = false;
   stopStats();
   stopAudioMeter();
+  stopVoiceChanger();
   hideConnScore();
   hideReconnectBanner();
   hidePrivacyShield();
   resetLightGate();
+
+  // Auto-stop recording when stream ends
+  if (_recMediaRecorder && _recMediaRecorder.state === 'recording') _recStop();
 
   if (ws) { ws.close(); ws = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   if (captureVideo) { captureVideo.srcObject = null; captureVideo = null; }
 
   localVideo.srcObject = null;
+  localVideo.classList.remove('active');
   offscreen = null;
   offCtx = null;
 
@@ -1454,6 +2334,7 @@ btnStart.addEventListener('click', async () => {
   } catch (err) {
     stopBeeping();
     setStatus('Error', 'error');
+    maybeShowKeyContactPopup(err.message);
     setLog('Failed to start: ' + err.message);
     showIdleState();
     setLoading(false);
@@ -1467,14 +2348,16 @@ btnStop.addEventListener('click', async () => {
   setLoading(true);
   stopBeeping();
 
-  stopStreaming();
+  // Stop local streaming first (camera + WebSocket). Wrapped in try so any
+  // DOM/state error here never prevents the backend pod from being terminated.
+  try { stopStreaming(); } catch (e) { console.warn('stopStreaming error (non-fatal):', e); }
 
   try {
     await window.chimera.stopSession();
     setCurrentPod(null);
     setStatus('Idle', '');
     setLog('Session stopped.');
-    playDoubleBeep(); // two beeps — session ended
+    playDoubleBeep();
     btnStop.style.display  = 'none';
     btnStart.style.display = 'block';
   } catch (err) {
@@ -1515,6 +2398,222 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// =============================================================================
+// INSTRUCTIONS TOUR
+// =============================================================================
+
+const TOUR_STEPS = [
+  {
+    selector: null,
+    title: 'Welcome to Chimera Lite',
+    body: 'This quick tour walks you through the full workflow — from logging in to running a live face swap. Use the buttons below to navigate, or press ← → on your keyboard. Click anywhere outside the card to exit.',
+    placement: 'center',
+  },
+  {
+    selector: '#cfg-license-key',
+    panel: true,
+    title: 'Step 1 — Login with your Product Key',
+    body: 'Enter your 12-character product key in the field above, then click <strong>Login with Product Key</strong>. This unlocks the session controls and auto-fills your API credentials. You only need to do this once per machine.',
+    placement: 'right',
+  },
+  {
+    selector: '#btn-upload',
+    panel: true,
+    title: 'Step 2 — Upload your Target Face',
+    body: 'Click <strong>Choose Photo</strong> to upload a clear, front-facing photo of the face you want to swap onto yourself. Use good lighting in the photo — the sharper and more neutral the photo, the cleaner the swap result.',
+    placement: 'right',
+  },
+  {
+    selector: '#cfg-camera',
+    title: 'Step 3 — Select your Camera',
+    body: 'Choose your webcam from the dropdown. Real cameras are listed first — avoid selecting virtual cameras like OBS Virtual Camera or DroidCam here, as those are outputs, not inputs.',
+    placement: 'right',
+  },
+  {
+    selector: '#btn-start',
+    title: 'Step 4 — Start a Session',
+    body: 'Once you are logged in and have uploaded a face, click <strong>Start Session</strong>. Chimera Lite will provision a GPU pod on a remote server and connect your camera feed to it. This usually takes 30–90 seconds the first time.',
+    placement: 'right',
+  },
+  {
+    selector: '.segmented',
+    title: 'Step 5 — Choose your Swap Mode',
+    body: '<strong>Realtime</strong> — Lower latency, steadier motion. Best for live video calls.<br><br><strong>Quality</strong> — GFPGAN face enhancement enabled. Sharper and more refined output, with a small amount of extra delay.',
+    placement: 'right',
+  },
+  {
+    selector: '#ctrl-brightness',
+    panel: true,
+    title: 'Step 6 — Preview Adjustments',
+    body: 'These sliders adjust what <em>you see</em> in the app preview — they do not affect the feed being processed by the GPU. Use them to fine-tune brightness, contrast, and colour saturation to your liking.',
+    placement: 'right',
+  },
+  {
+    selector: '.shield-wrap',
+    title: 'Step 7 — Privacy Shield',
+    body: 'The Privacy Shield automatically <strong>hides the video feed</strong> when your connection quality drops critically low — preventing frozen or glitched frames from exposing your real face to viewers. Click the icon to toggle it.',
+    placement: 'bottom',
+  },
+  {
+    selector: '#cfg-obs-port',
+    panel: true,
+    title: 'Step 8 — OBS Browser Source',
+    body: 'To mirror your swapped feed into OBS or any screen-capture tool, add a <strong>Browser Source</strong> in OBS pointed at <code>http://localhost:7891</code> (or the port shown in your config). Set it to 640×360 with no audio.',
+    placement: 'right',
+  },
+  {
+    selector: '#btn-stop',
+    title: 'Step 9 — Stop the Session',
+    body: 'When you are done, click <strong>Stop Session</strong>. This terminates the GPU pod, releases your camera, and ends any associated billing. Always stop the session before closing the app.',
+    placement: 'right',
+  },
+  {
+    selector: null,
+    title: "You're all set!",
+    body: 'That covers everything you need to run a live face swap. If you get stuck, open the <strong>Setup Guide</strong> in the sidebar for detailed OBS and DroidCam instructions. Good luck!',
+    placement: 'center',
+  },
+];
+
+let _tourActive = false;
+let _tourStep   = 0;
+
+const _tourBackdrop  = document.getElementById('tour-backdrop');
+const _tourSpotlight = document.getElementById('tour-spotlight');
+const _tourCard      = document.getElementById('tour-card');
+const _tourStepNum   = document.getElementById('tour-step-num');
+const _tourStepTotal = document.getElementById('tour-step-total');
+const _tourTitle     = document.getElementById('tour-title');
+const _tourBody      = document.getElementById('tour-body');
+const _tourBtnNext   = document.getElementById('tour-btn-next');
+const _tourBtnPrev   = document.getElementById('tour-btn-prev');
+const _tourBtnSkip   = document.getElementById('tour-btn-skip');
+
+function _tourEnd() {
+  _tourActive = false;
+  if (_tourBackdrop)  _tourBackdrop.classList.remove('active');
+  if (_tourSpotlight) { _tourSpotlight.style.opacity = '0'; }
+  if (_tourCard)      _tourCard.classList.remove('active');
+}
+
+function _tourRender() {
+  if (!_tourCard) return;
+  const step    = TOUR_STEPS[_tourStep];
+  const total   = TOUR_STEPS.filter(s => s.selector !== null || _tourStep === 0 || _tourStep === TOUR_STEPS.length - 1 || !s._skip).length;
+  const isFirst = _tourStep === 0;
+  const isLast  = _tourStep === TOUR_STEPS.length - 1;
+
+  // Content
+  if (_tourStepNum)   _tourStepNum.textContent   = _tourStep + 1;
+  if (_tourStepTotal) _tourStepTotal.textContent  = TOUR_STEPS.length;
+  if (_tourTitle)     _tourTitle.textContent      = step.title;
+  if (_tourBody)      _tourBody.innerHTML         = step.body;
+
+  // Navigation
+  if (_tourBtnPrev) _tourBtnPrev.style.visibility = isFirst ? 'hidden' : 'visible';
+  if (_tourBtnNext) {
+    _tourBtnNext.textContent = isLast ? 'Done ✓' : 'Next →';
+    _tourBtnNext.className   = isLast ? 'tour-btn-next done' : 'tour-btn-next';
+  }
+  if (_tourBtnSkip) _tourBtnSkip.style.display = isLast ? 'none' : 'inline';
+
+  // Resolve target element
+  let targetEl = step.selector ? document.querySelector(step.selector) : null;
+  if (targetEl && step.panel) {
+    targetEl = targetEl.closest('section') || targetEl;
+  }
+
+  if (!targetEl || step.placement === 'center') {
+    // Center card, hide spotlight
+    if (_tourSpotlight) _tourSpotlight.style.opacity = '0';
+    _tourCard.style.top       = '50%';
+    _tourCard.style.left      = '50%';
+    _tourCard.style.transform = 'translate(-50%, -50%)';
+    _tourCard.className       = 'tour-card active';
+  } else {
+    // Scroll target into view then position
+    targetEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    // Use rAF so scroll has a chance to settle slightly before measuring
+    requestAnimationFrame(() => {
+      const rect   = targetEl.getBoundingClientRect();
+      const pad    = 10;
+      const cardW  = 330;
+      const cardH  = 240;
+      const margin = 16;
+      const winW   = window.innerWidth;
+      const winH   = window.innerHeight;
+
+      // Spotlight
+      if (_tourSpotlight) {
+        _tourSpotlight.style.opacity = '1';
+        _tourSpotlight.style.top     = (rect.top  - pad) + 'px';
+        _tourSpotlight.style.left    = (rect.left - pad) + 'px';
+        _tourSpotlight.style.width   = (rect.width  + pad * 2) + 'px';
+        _tourSpotlight.style.height  = (rect.height + pad * 2) + 'px';
+      }
+
+      // Card placement — prefer right side, fall back left/below/above
+      let cardTop, cardLeft, arrowClass;
+      const spaceRight = winW - rect.right - pad;
+      const spaceLeft  = rect.left - pad;
+
+      if (spaceRight >= cardW + margin) {
+        cardLeft   = rect.right + pad + margin;
+        cardTop    = Math.max(20, Math.min(rect.top - pad, winH - cardH - 20));
+        arrowClass = 'arrow-left';
+      } else if (spaceLeft >= cardW + margin) {
+        cardLeft   = rect.left - pad - margin - cardW;
+        cardTop    = Math.max(20, Math.min(rect.top - pad, winH - cardH - 20));
+        arrowClass = 'arrow-right';
+      } else if (rect.top > winH / 2) {
+        cardLeft   = Math.max(20, Math.min(rect.left - pad, winW - cardW - 20));
+        cardTop    = Math.max(20, rect.top - pad - margin - cardH);
+        arrowClass = 'arrow-bottom';
+      } else {
+        cardLeft   = Math.max(20, Math.min(rect.left - pad, winW - cardW - 20));
+        cardTop    = rect.bottom + pad + margin;
+        arrowClass = 'arrow-top';
+      }
+
+      _tourCard.style.transform = '';
+      _tourCard.style.top       = cardTop  + 'px';
+      _tourCard.style.left      = cardLeft + 'px';
+      _tourCard.className       = `tour-card active ${arrowClass}`;
+    });
+  }
+}
+
+function _tourStart() {
+  _tourActive = true;
+  _tourStep   = 0;
+  if (_tourBackdrop)  _tourBackdrop.classList.add('active');
+  if (_tourSpotlight) _tourSpotlight.style.opacity = '0';
+  if (_tourCard)      _tourCard.classList.add('active');
+  _tourRender();
+}
+
+if (_tourBtnNext)  _tourBtnNext.addEventListener('click', () => {
+  if (_tourStep >= TOUR_STEPS.length - 1) { _tourEnd(); return; }
+  _tourStep++;
+  _tourRender();
+});
+if (_tourBtnPrev)  _tourBtnPrev.addEventListener('click', () => {
+  if (_tourStep > 0) { _tourStep--; _tourRender(); }
+});
+if (_tourBtnSkip)  _tourBtnSkip.addEventListener('click', _tourEnd);
+if (_tourBackdrop) _tourBackdrop.addEventListener('click', _tourEnd);
+
+if (btnInstructions) btnInstructions.addEventListener('click', _tourStart);
+
+// Keyboard navigation for the tour
+document.addEventListener('keydown', (e) => {
+  if (!_tourActive) return;
+  if (e.key === 'Escape')      { _tourEnd(); return; }
+  if (e.key === 'ArrowRight' && _tourStep < TOUR_STEPS.length - 1) { _tourStep++; _tourRender(); }
+  if (e.key === 'ArrowLeft'  && _tourStep > 0)                     { _tourStep--; _tourRender(); }
+});
+
 // --- Init: reconnect to existing session ---
 (async () => {
   runLaunchSequence().catch(() => {});
@@ -1529,7 +2628,10 @@ document.addEventListener('keydown', (e) => {
     licenseUser = licenseSession?.user || null;
     updateLicenseUI();
     if (licenseLoggedIn) {
+      hideKeyContactPopup();
       await refreshNotifications(true);
+    } else {
+      showKeyContactPopup();
     }
 
     const profileData = await window.chimera.getStreamProfile();

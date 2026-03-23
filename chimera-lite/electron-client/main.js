@@ -10,12 +10,10 @@ function resolveUserEnvPath() {
 }
 
 const envCandidates = [
-  resolveUserEnvPath(),
   path.join(process.cwd(), '.env'),
   path.join(__dirname, '.env'),
-  path.join(path.dirname(app.getPath('exe')), '.env'),
-  path.join(process.resourcesPath, '.env'),
 ];
+// app.getPath() paths added after app is ready (see app.whenReady below)
 
 for (const envPath of envCandidates) {
   if (fs.existsSync(envPath)) {
@@ -64,12 +62,12 @@ let licenseSessionToken = '';
 let licenseSessionUser = null;
 
 function getAuthHeaders() {
+  if (licenseSessionToken) {
+    return { authorization: `Bearer ${licenseSessionToken}` };
+  }
   const headers = {};
   if (appConfig.apiToken) {
     headers['x-api-token'] = appConfig.apiToken;
-  }
-  if (licenseSessionToken) {
-    headers.authorization = `Bearer ${licenseSessionToken}`;
   }
   return headers;
 }
@@ -225,6 +223,17 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Load .env from paths that require app to be ready
+  for (const envPath of [
+    resolveUserEnvPath(),
+    path.join(path.dirname(app.getPath('exe')), '.env'),
+    path.join(process.resourcesPath || '', '.env'),
+  ]) {
+    try {
+      if (fs.existsSync(envPath)) dotenv.config({ path: envPath, override: false });
+    } catch (_) {}
+  }
+
   // Allow camera access for WebRTC
   app.on('web-contents-created', (_e, contents) => {
     contents.session.setPermissionRequestHandler((_wc, permission, callback) => {
@@ -322,18 +331,13 @@ ipcMain.handle('license-login', async (_event, inputProductKey) => {
   }
 
   const res = await axios.post(`${appConfig.backendUrl}/auth/product-login`, { productKey }, {
-    headers: { 'Content-Type': 'application/json', ...(appConfig.apiToken ? { 'x-api-token': appConfig.apiToken } : {}) },
+    headers: { 'Content-Type': 'application/json' },
     timeout: 10000,
   });
 
   licenseSessionToken = String(res.data?.token || '').trim();
   licenseSessionUser = res.data?.user || null;
   appConfig.licenseKey = productKey;
-
-  // Auto-fill API token from backend so user never has to enter it
-  if (res.data?.apiToken) {
-    appConfig.apiToken = String(res.data.apiToken).trim();
-  }
   writeConfigFile(appConfig);
 
   return {
@@ -466,6 +470,44 @@ ipcMain.handle('open-drivers-folder', async () => {
   throw new Error('DroidCam drivers folder not found. Reinstall the app.');
 });
 
+ipcMain.handle('get-voices', async () => {
+  ensureBackendConfig();
+  const res = await axios.get(`${appConfig.backendUrl}/voices`, {
+    headers: getAuthHeaders(),
+    timeout: 20000,
+  });
+  return res.data;
+});
+
+ipcMain.handle('voice-convert', async (_event, audioBuffer, voiceId) => {
+  ensureBackendConfig();
+  const FormData = require('form-data');
+  const form = new FormData();
+  form.append('audio', Buffer.from(audioBuffer), { filename: 'chunk.webm', contentType: 'audio/webm' });
+  form.append('voice_id', voiceId);
+  const res = await axios.post(`${appConfig.backendUrl}/voice-convert`, form, {
+    headers: { ...getAuthHeaders(), ...form.getHeaders() },
+    responseType: 'stream',
+    timeout: 15000,
+  });
+  // Collect streamed chunks into a single Buffer and return
+  const chunks = [];
+  for await (const chunk of res.data) { chunks.push(chunk); }
+  return Buffer.concat(chunks);
+});
+
+ipcMain.handle('tts-generate', async (_event, text, voiceId) => {
+  ensureBackendConfig();
+  const res = await axios.post(`${appConfig.backendUrl}/tts-generate`, {
+    text,
+    voice_id: voiceId,
+  }, {
+    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+    timeout: 60000,
+  });
+  return res.data;
+});
+
 // Renderer sends each swapped JPEG frame as a raw ArrayBuffer.
 // We base64-encode here (Node.js Buffer is faster than renderer FileReader) and push to OBS SSE clients.
 ipcMain.on('obs-frame', (_event, data) => {
@@ -474,5 +516,99 @@ ipcMain.on('obs-frame', (_event, data) => {
   const msg = `event: frame\ndata: data:image/jpeg;base64,${b64}\n\n`;
   for (const client of obsClients) {
     try { client.write(msg); } catch { obsClients.delete(client); }
+  }
+});
+
+// Save recording blob to disk via native Save dialog (WebM → MP4 conversion)
+ipcMain.handle('save-recording', async (_event, buffer) => {
+  const { dialog } = require('electron');
+  const { execFile } = require('child_process');
+  const os = require('os');
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const defaultName = `chimera-recording-${timestamp}.mp4`;
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save Recording',
+    defaultPath: defaultName,
+    filters: [
+      { name: 'MP4 Video', extensions: ['mp4'] },
+      { name: 'WebM Video', extensions: ['webm'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+
+  const savePath = result.filePath;
+  const wantsMP4 = savePath.toLowerCase().endsWith('.mp4');
+
+  if (!wantsMP4) {
+    // Save raw WebM directly
+    fs.writeFileSync(savePath, Buffer.from(buffer));
+    return { ok: true, path: savePath };
+  }
+
+  // Write WebM to temp file, convert to MP4 with ffmpeg, clean up
+  const tmpWebm = path.join(os.tmpdir(), `chimera-rec-${Date.now()}.webm`);
+  fs.writeFileSync(tmpWebm, Buffer.from(buffer));
+
+  let ffmpegPath;
+  try {
+    ffmpegPath = require('ffmpeg-static');
+  } catch (_) {
+    // Fallback: save as WebM if ffmpeg not available
+    fs.renameSync(tmpWebm, savePath.replace(/\.mp4$/i, '.webm'));
+    return { ok: true, path: savePath.replace(/\.mp4$/i, '.webm'), note: 'ffmpeg not found, saved as WebM' };
+  }
+
+  return new Promise((resolve) => {
+    execFile(ffmpegPath, [
+      '-y',                   // overwrite
+      '-i', tmpWebm,          // input WebM
+      '-c:v', 'libx264',      // H.264 video
+      '-preset', 'fast',      // fast encoding
+      '-crf', '23',           // good quality
+      '-c:a', 'aac',          // AAC audio
+      '-b:a', '128k',
+      '-movflags', '+faststart', // streaming-friendly
+      savePath,
+    ], { timeout: 120000 }, (err) => {
+      // Clean up temp file
+      try { fs.unlinkSync(tmpWebm); } catch (_) {}
+
+      if (err) {
+        console.error('[Rec] ffmpeg error:', err.message);
+        // Fallback: re-save the WebM
+        const fallback = savePath.replace(/\.mp4$/i, '.webm');
+        try {
+          fs.writeFileSync(fallback, Buffer.from(buffer));
+          resolve({ ok: true, path: fallback, note: 'ffmpeg failed, saved as WebM' });
+        } catch (e2) {
+          resolve({ ok: false, error: e2.message });
+        }
+        return;
+      }
+      resolve({ ok: true, path: savePath });
+    });
+  });
+});
+
+// Open the folder containing a saved file and select it in Explorer
+ipcMain.handle('open-file', async (_event, filePath) => {
+  const { shell } = require('electron');
+  try {
+    shell.showItemInFolder(filePath);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('open-external', async (_event, url) => {
+  const { shell } = require('electron');
+  try {
+    await shell.openExternal(String(url || ''));
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
 });
