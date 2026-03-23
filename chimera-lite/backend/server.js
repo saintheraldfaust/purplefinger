@@ -33,6 +33,11 @@ let streamProfile = 'realtime';
 let stopInFlight = null;
 const CONTACT_SAINT_H_MESSAGE = 'Your account is unavailable right now. Please contact Saint H. on WhatsApp: 09065786976.';
 
+function formatCooldownMessage(resetAt, prefix) {
+  const date = resetAt ? new Date(resetAt) : null;
+  return `${prefix} Please wait until ${date ? date.toLocaleString() : 'the reset window ends'} before trying again.`;
+}
+
 function formatStartError(err) {
   const message = String(err?.message || 'Failed to start pod').trim();
   if (/no longer any instances available|no gpu capacity/i.test(message)) {
@@ -168,6 +173,19 @@ app.get('/me', requireLicensedUser, (req, res) => {
   });
 });
 
+app.get('/me/usage', requireLicensedUser, async (req, res) => {
+  try {
+    const usage = await licenseStore.getUsageSnapshot(req.licenseUser._id, {
+      voiceLimit: config.VOICE_CHAR_LIMIT,
+      voiceWindowMs: config.VOICE_WINDOW_MS,
+      activeSession,
+    });
+    res.json({ ok: true, usage });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/me/notifications', requireLicensedUser, async (req, res) => {
   const includeRead = String(req.query.includeRead || '').toLowerCase() === 'true';
   const limit = Number(req.query.limit || 100);
@@ -282,7 +300,29 @@ app.post('/start', requireAccess, async (req, res) => {
 
     const existingSession = await getOrRecoverActiveSession();
     if (existingSession) {
+      if (
+        req.auth?.type === 'license'
+        && existingSession.ownerUserId
+        && String(existingSession.ownerUserId) !== String(req.auth.user?._id || '')
+      ) {
+        return res.status(409).json({ error: 'Another licensed session is already active. Please wait for it to finish.' });
+      }
       return res.json({ ok: true, reused: true, podId: existingSession.podId, endpoint: existingSession.endpoint });
+    }
+
+    let sessionWindow = null;
+    if (req.auth?.type === 'license' && req.auth?.user?._id) {
+      sessionWindow = await licenseStore.beginSessionWindow(req.auth.user._id, {
+        sessionMs: config.SESSION_MAX_MS,
+        cooldownMs: config.SESSION_COOLDOWN_MS,
+      });
+      if (!sessionWindow.ok) {
+        return res.status(429).json({
+          error: formatCooldownMessage(sessionWindow.cooldownUntil, 'Session limit reached.'),
+          code: 'SESSION_RATE_LIMIT',
+          resetAt: sessionWindow.cooldownUntil,
+        });
+      }
     }
 
     const { pod, gpuType } = await startPod();
@@ -291,7 +331,16 @@ app.post('/start', requireAccess, async (req, res) => {
     // Poll until the pod is running and we have a public port (~1-2 min)
     const endpoint = await pollForEndpoint(podId);
 
-    setActiveSession({ podId, endpoint, serverReady: false });
+    setActiveSession({
+      podId,
+      endpoint,
+      serverReady: false,
+      ownerUserId: req.auth?.type === 'license' ? String(req.auth.user?._id || '') : '',
+      startedAt: sessionWindow?.sessionStartedAt || new Date(),
+      endsAt: sessionWindow?.sessionEndsAt || new Date(Date.now() + config.SESSION_TIMEOUT_MS),
+      cooldownUntil: sessionWindow?.cooldownUntil || null,
+      maxDurationMs: req.auth?.type === 'license' ? config.SESSION_MAX_MS : config.SESSION_TIMEOUT_MS,
+    });
 
     // Return endpoint immediately — client can show progress while server boots.
     // Inference server readiness check runs in background.
@@ -558,6 +607,22 @@ app.post('/tts-generate', requireAccess, async (req, res) => {
     return res.status(400).json({ error: 'text and voice_id are required' });
   }
 
+  if (req.auth?.type === 'license' && req.auth?.user?._id) {
+    const quota = await licenseStore.reserveVoiceCharacters(req.auth.user._id, String(text).length, {
+      limit: config.VOICE_CHAR_LIMIT,
+      windowMs: config.VOICE_WINDOW_MS,
+    });
+    if (!quota.ok) {
+      return res.status(429).json({
+        error: formatCooldownMessage(quota.resetAt, 'Voice limit reached (5,000 characters per hour).'),
+        code: 'VOICE_RATE_LIMIT',
+        resetAt: quota.resetAt,
+        used: quota.used,
+        limit: quota.limit,
+      });
+    }
+  }
+
   try {
     const ttsResp = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voice_id}/with-timestamps?output_format=mp3_44100_128`,
@@ -645,6 +710,11 @@ function getSessionSnapshot(session) {
     podId: session.podId,
     endpoint: session.endpoint,
     serverReady: !!session.serverReady,
+    ownerUserId: session.ownerUserId || '',
+    startedAt: session.startedAt || null,
+    endsAt: session.endsAt || null,
+    cooldownUntil: session.cooldownUntil || null,
+    maxDurationMs: Number(session.maxDurationMs || config.SESSION_TIMEOUT_MS),
   };
 }
 
@@ -676,24 +746,26 @@ function clearSessionState() {
   }
 }
 
-function scheduleSessionTimeout(podId) {
+function scheduleSessionTimeout(podId, timeoutMs) {
   return setTimeout(async () => {
     console.log('Session timeout — terminating pod', podId);
     await stopPod(podId).catch(console.error);
     if (activeSession?.podId === podId) {
       clearActiveSession();
     }
-  }, config.SESSION_TIMEOUT_MS);
+  }, timeoutMs);
 }
 
 function setActiveSession(session) {
   if (activeSession?.timeoutHandle) {
     clearTimeout(activeSession.timeoutHandle);
   }
+  const endsAtMs = session.endsAt ? new Date(session.endsAt).getTime() : 0;
+  const timeoutMs = endsAtMs ? Math.max(1000, endsAtMs - Date.now()) : Number(session.maxDurationMs || config.SESSION_TIMEOUT_MS);
   activeSession = {
     ...session,
     serverReady: !!session.serverReady,
-    timeoutHandle: scheduleSessionTimeout(session.podId),
+    timeoutHandle: scheduleSessionTimeout(session.podId, timeoutMs),
   };
   saveSessionState(activeSession);
   return activeSession;
@@ -715,7 +787,16 @@ async function adoptExistingPod(podId, options = {}) {
     return null;
   }
 
-  const session = setActiveSession({ podId, endpoint, serverReady: false });
+  const session = setActiveSession({
+    podId,
+    endpoint,
+    serverReady: false,
+    ownerUserId: options.meta?.ownerUserId || '',
+    startedAt: options.meta?.startedAt || new Date(),
+    endsAt: options.meta?.endsAt || new Date(Date.now() + config.SESSION_TIMEOUT_MS),
+    cooldownUntil: options.meta?.cooldownUntil || null,
+    maxDurationMs: Number(options.meta?.maxDurationMs || config.SESSION_TIMEOUT_MS),
+  });
   if (options.persistWarmPodId) {
     console.log(`Warm pod attached manually: ${podId}`);
   } else {
@@ -754,7 +835,7 @@ async function getOrRecoverActiveSession() {
   const candidatePodIds = [persistedSession?.podId, config.RUNPOD_WARM_POD_ID].filter(Boolean);
   for (const podId of [...new Set(candidatePodIds)]) {
     try {
-      const session = await adoptExistingPod(podId);
+      const session = await adoptExistingPod(podId, { meta: persistedSession });
       if (session) return session;
     } catch (err) {
       console.error(`Failed to recover warm pod ${podId}:`, err.message);

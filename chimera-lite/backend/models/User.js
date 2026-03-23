@@ -8,6 +8,11 @@ const userSchema = new mongoose.Schema(
     productKey: { type: String, required: true, unique: true, uppercase: true, index: true },
     active: { type: Boolean, default: true },
     lastLoginAt: { type: Date, default: null },
+    voiceWindowStartedAt: { type: Date, default: null },
+    voiceCharsUsed: { type: Number, default: 0 },
+    sessionStartedAt: { type: Date, default: null },
+    sessionEndsAt: { type: Date, default: null },
+    sessionCooldownUntil: { type: Date, default: null },
   },
   {
     timestamps: true,

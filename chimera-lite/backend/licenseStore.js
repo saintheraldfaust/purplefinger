@@ -200,6 +200,95 @@ class LicenseStore {
     return { ok: true, user };
   }
 
+  async reserveVoiceCharacters(userId, charCount, options = {}) {
+    const limit = Number(options.limit || 5000);
+    const windowMs = Number(options.windowMs || 60 * 60 * 1000);
+    const requested = Math.max(0, Number(charCount || 0));
+    const user = await User.findById(userId);
+    if (!user) throw new Error('user not found');
+
+    const nowMs = Date.now();
+    const startMs = user.voiceWindowStartedAt ? user.voiceWindowStartedAt.getTime() : 0;
+    const expired = !startMs || (nowMs - startMs) >= windowMs;
+
+    if (expired) {
+      user.voiceWindowStartedAt = new Date(nowMs);
+      user.voiceCharsUsed = 0;
+    }
+
+    const used = Number(user.voiceCharsUsed || 0);
+    const resetAt = new Date((user.voiceWindowStartedAt?.getTime() || nowMs) + windowMs);
+
+    if ((used + requested) > limit) {
+      return { ok: false, used, requested, limit, resetAt };
+    }
+
+    user.voiceCharsUsed = used + requested;
+    await user.save();
+    return { ok: true, used: user.voiceCharsUsed, requested, limit, resetAt };
+  }
+
+  async beginSessionWindow(userId, options = {}) {
+    const sessionMs = Number(options.sessionMs || 60 * 60 * 1000);
+    const cooldownMs = Number(options.cooldownMs || 60 * 60 * 1000);
+    const user = await User.findById(userId);
+    if (!user) throw new Error('user not found');
+
+    const nowMs = Date.now();
+    const cooldownUntilMs = user.sessionCooldownUntil ? user.sessionCooldownUntil.getTime() : 0;
+    if (cooldownUntilMs && nowMs < cooldownUntilMs) {
+      return { ok: false, cooldownUntil: user.sessionCooldownUntil, sessionEndsAt: user.sessionEndsAt };
+    }
+
+    user.sessionStartedAt = new Date(nowMs);
+    user.sessionEndsAt = new Date(nowMs + sessionMs);
+    user.sessionCooldownUntil = new Date(nowMs + sessionMs + cooldownMs);
+    await user.save();
+
+    return {
+      ok: true,
+      sessionStartedAt: user.sessionStartedAt,
+      sessionEndsAt: user.sessionEndsAt,
+      cooldownUntil: user.sessionCooldownUntil,
+    };
+  }
+
+  async getUsageSnapshot(userId, options = {}) {
+    const voiceLimit = Number(options.voiceLimit || 5000);
+    const voiceWindowMs = Number(options.voiceWindowMs || 60 * 60 * 1000);
+    const user = await User.findById(userId).lean();
+    if (!user) throw new Error('user not found');
+
+    const nowMs = Date.now();
+    const voiceStartMs = user.voiceWindowStartedAt ? new Date(user.voiceWindowStartedAt).getTime() : 0;
+    const voiceExpired = !voiceStartMs || (nowMs - voiceStartMs) >= voiceWindowMs;
+    const voiceUsed = voiceExpired ? 0 : Number(user.voiceCharsUsed || 0);
+    const voiceResetAt = new Date((voiceExpired ? nowMs : voiceStartMs) + voiceWindowMs);
+
+    const sessionEndsAt = user.sessionEndsAt ? new Date(user.sessionEndsAt) : null;
+    const cooldownUntil = user.sessionCooldownUntil ? new Date(user.sessionCooldownUntil) : null;
+    const ownedActive = options.activeSession && String(options.activeSession.ownerUserId || '') === String(user._id || '');
+    const sessionActive = !!(ownedActive && sessionEndsAt && sessionEndsAt.getTime() > nowMs);
+
+    return {
+      voice: {
+        limit: voiceLimit,
+        used: voiceUsed,
+        remaining: Math.max(0, voiceLimit - voiceUsed),
+        resetAt: voiceResetAt,
+        resetInMs: Math.max(0, voiceResetAt.getTime() - nowMs),
+      },
+      session: {
+        active: sessionActive,
+        startedAt: user.sessionStartedAt || null,
+        endsAt: sessionEndsAt,
+        activeRemainingMs: sessionActive && sessionEndsAt ? Math.max(0, sessionEndsAt.getTime() - nowMs) : 0,
+        cooldownUntil,
+        cooldownRemainingMs: cooldownUntil ? Math.max(0, cooldownUntil.getTime() - nowMs) : 0,
+      },
+    };
+  }
+
   invalidateUserToken(token) {
     this.userSessions.delete(String(token || '').trim());
   }

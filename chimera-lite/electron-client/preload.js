@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('chimera', {
   getAppConfig: () => ipcRenderer.invoke('get-app-config'),
   saveAppConfig: (config) => ipcRenderer.invoke('save-app-config', config),
   getLicenseSession: () => ipcRenderer.invoke('get-license-session'),
+  getUsage: () => ipcRenderer.invoke('get-usage'),
   licenseLogin: (productKey) => ipcRenderer.invoke('license-login', productKey),
   licenseLogout: () => ipcRenderer.invoke('license-logout'),
   getUserNotifications: (includeRead) => ipcRenderer.invoke('get-user-notifications', includeRead),

@@ -13,6 +13,12 @@ const btnCloseNotif   = document.getElementById('btn-close-notif');
 const keyContactOverlay = document.getElementById('key-contact-overlay');
 const btnCloseKeyContact = document.getElementById('btn-close-key-contact');
 const btnOpenWhatsapp = document.getElementById('btn-open-whatsapp');
+const licenseResultOverlay = document.getElementById('license-result-overlay');
+const licenseResultPopup = document.getElementById('license-result-popup');
+const licenseResultIcon = document.getElementById('license-result-icon');
+const licenseResultMessage = document.getElementById('license-result-message');
+const btnCloseLicenseResult = document.getElementById('btn-close-license-result');
+const btnOkLicenseResult = document.getElementById('btn-ok-license-result');
 const notifBadge      = document.getElementById('notif-badge');
 const notifOverlay    = document.getElementById('notif-overlay');
 const notifPopupBody  = document.getElementById('notif-popup-body');
@@ -45,6 +51,11 @@ const cfgObsPort      = document.getElementById('cfg-obs-port');
 const cfgWarmPodId    = document.getElementById('cfg-warm-pod-id');
 const cfgCamera       = document.getElementById('cfg-camera');
 const licenseStatus   = document.getElementById('license-status');
+const usageLoginHint  = document.getElementById('usage-login-hint');
+const voiceUsageLine  = document.getElementById('voice-usage-line');
+const voiceResetLine  = document.getElementById('voice-reset-line');
+const sessionUsageLine = document.getElementById('session-usage-line');
+const sessionResetLine = document.getElementById('session-reset-line');
 const configNote      = document.getElementById('config-note');
 const obsUrlLabel     = document.getElementById('obs-url');
 
@@ -175,6 +186,8 @@ function applyConfigToUI(config) {
 let licenseLoggedIn = false;
 let licenseUser = null;
 let keyContactPopupShown = false;
+let usagePollTimer = null;
+let usageRefreshInFlight = false;
 
 function setLicenseStatus(text) {
   if (licenseStatus) licenseStatus.textContent = text;
@@ -194,6 +207,20 @@ function showKeyContactPopup(force = false) {
 function hideKeyContactPopup() {
   if (!keyContactOverlay) return;
   keyContactOverlay.classList.remove('visible');
+}
+
+function showLicenseResultPopup(valid, message) {
+  if (!licenseResultOverlay || !licenseResultPopup) return;
+  licenseResultPopup.classList.remove('valid', 'invalid');
+  licenseResultPopup.classList.add(valid ? 'valid' : 'invalid');
+  if (licenseResultIcon) licenseResultIcon.textContent = valid ? '✓' : '!';
+  if (licenseResultMessage) licenseResultMessage.textContent = String(message || (valid ? 'Product key is valid.' : 'Product key is invalid.'));
+  licenseResultOverlay.classList.add('visible');
+}
+
+function hideLicenseResultPopup() {
+  if (!licenseResultOverlay) return;
+  licenseResultOverlay.classList.remove('visible');
 }
 
 function maybeShowKeyContactPopup(message) {
@@ -220,6 +247,98 @@ function updateLicenseUI() {
   }
 }
 
+function formatUsageDuration(ms) {
+  const totalSeconds = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function formatUsageTimestamp(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+}
+
+function renderUsageState(state = {}) {
+  const requiresLogin = !!state.requiresLogin;
+  const usage = state.usage || null;
+
+  if (usageLoginHint) {
+    if (licenseLoggedIn) {
+      usageLoginHint.textContent = 'Your limits refresh automatically in realtime.';
+    } else if (isSessionUnlocked()) {
+      usageLoginHint.textContent = 'Usage tracking is shown for product-key accounts.';
+    } else {
+      usageLoginHint.textContent = 'Login with your product key to see your voice and session limits.';
+    }
+  }
+
+  if (requiresLogin || !usage) {
+    if (voiceUsageLine) voiceUsageLine.textContent = 'Voice: —';
+    if (voiceResetLine) voiceResetLine.textContent = 'Voice reset: —';
+    if (sessionUsageLine) sessionUsageLine.textContent = 'Session: —';
+    if (sessionResetLine) sessionResetLine.textContent = 'Session reset: —';
+    return;
+  }
+
+  const voice = usage.voice || {};
+  const session = usage.session || {};
+  if (voiceUsageLine) {
+    voiceUsageLine.textContent = `Voice: ${Number(voice.used || 0).toLocaleString()} / ${Number(voice.limit || 0).toLocaleString()} chars used • ${Number(voice.remaining || 0).toLocaleString()} left`;
+  }
+  if (voiceResetLine) {
+    voiceResetLine.textContent = `Voice reset: in ${formatUsageDuration(voice.resetInMs)} • ${formatUsageTimestamp(voice.resetAt)}`;
+  }
+
+  if (session.active) {
+    if (sessionUsageLine) sessionUsageLine.textContent = `Session: active • ${formatUsageDuration(session.activeRemainingMs)} left in this 1-hour window`;
+    if (sessionResetLine) sessionResetLine.textContent = `Cooldown reset: ${formatUsageTimestamp(session.cooldownUntil)}`;
+    return;
+  }
+
+  if (Number(session.cooldownRemainingMs || 0) > 0) {
+    if (sessionUsageLine) sessionUsageLine.textContent = `Session: cooldown active • next start in ${formatUsageDuration(session.cooldownRemainingMs)}`;
+    if (sessionResetLine) sessionResetLine.textContent = `Cooldown reset: ${formatUsageTimestamp(session.cooldownUntil)}`;
+    return;
+  }
+
+  if (sessionUsageLine) sessionUsageLine.textContent = 'Session: ready • up to 1 hour available';
+  if (sessionResetLine) sessionResetLine.textContent = 'Cooldown reset: ready now';
+}
+
+async function refreshUsage(options = {}) {
+  if (!window.chimera?.getUsage) return;
+  if (!licenseLoggedIn) {
+    renderUsageState({ requiresLogin: true });
+    return;
+  }
+  if (usageRefreshInFlight) return;
+
+  usageRefreshInFlight = true;
+  try {
+    const result = await window.chimera.getUsage();
+    renderUsageState(result || {});
+  } catch (err) {
+    renderUsageState({ usage: null, requiresLogin: true });
+    if (!options.silent) {
+      console.error('Failed to refresh usage:', err);
+    }
+  } finally {
+    usageRefreshInFlight = false;
+  }
+}
+
+function startUsagePolling() {
+  if (usagePollTimer) clearInterval(usagePollTimer);
+  usagePollTimer = setInterval(() => {
+    refreshUsage({ silent: true }).catch(() => {});
+  }, 1000);
+}
+
 if (btnCloseKeyContact) {
   btnCloseKeyContact.addEventListener('click', hideKeyContactPopup);
 }
@@ -227,6 +346,14 @@ if (btnCloseKeyContact) {
 if (keyContactOverlay) {
   keyContactOverlay.addEventListener('click', (e) => {
     if (e.target === keyContactOverlay) hideKeyContactPopup();
+  });
+}
+
+if (btnCloseLicenseResult) btnCloseLicenseResult.addEventListener('click', hideLicenseResultPopup);
+if (btnOkLicenseResult) btnOkLicenseResult.addEventListener('click', hideLicenseResultPopup);
+if (licenseResultOverlay) {
+  licenseResultOverlay.addEventListener('click', (e) => {
+    if (e.target === licenseResultOverlay) hideLicenseResultPopup();
   });
 }
 
@@ -608,6 +735,7 @@ if (lsGenerateBtn) {
       maybeShowKeyContactPopup(err.message);
       if (lsStatus) lsStatus.textContent = '❌ ' + (err.message || 'Generation failed');
     } finally {
+      refreshUsage({ silent: true }).catch(() => {});
       _lsGenerating = false;
       lsGenerateBtn.classList.remove('generating');
       lsGenerateBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg> Generate Speech';
@@ -2020,12 +2148,17 @@ btnLicenseLogin.addEventListener('click', async () => {
     });
     applyConfigToUI(saved);
     setLog('Product key login successful.');
+    showLicenseResultPopup(true, 'Product key valid. Voices unlocked and refreshed.');
+    await loadVoices();
     await refreshNotifications(true);
+    await refreshUsage();
   } catch (err) {
     licenseLoggedIn = false;
     licenseUser = null;
     updateLicenseUI();
+    renderUsageState({ requiresLogin: true });
     showKeyContactPopup(true);
+    showLicenseResultPopup(false, err.message || 'Invalid product key.');
     setLog(`Product key login failed: ${err.message}`);
   } finally {
     btnLicenseLogin.disabled = false;
@@ -2039,6 +2172,7 @@ btnLicenseLogout.addEventListener('click', async () => {
     licenseLoggedIn = false;
     licenseUser = null;
     updateLicenseUI();
+    renderUsageState({ requiresLogin: true });
     showKeyContactPopup(true);
     _cachedNotifications = [];
     updateNotifBadge(0);
@@ -2329,6 +2463,7 @@ btnStart.addEventListener('click', async () => {
     setStatus('Active', 'active');
     setLog(`Streaming — ${data.endpoint.ip}:${data.endpoint.port}`);
     btnUpload.disabled = false;
+    refreshUsage({ silent: true }).catch(() => {});
 
     await startStreaming(data.endpoint.ip, data.endpoint.port);
   } catch (err) {
@@ -2364,6 +2499,8 @@ btnStop.addEventListener('click', async () => {
     setStatus('Error', 'error');
     setLog('Failed to stop: ' + err.message);
   }
+
+  refreshUsage({ silent: true }).catch(() => {});
 
   setLoading(false);
 });
@@ -2618,6 +2755,8 @@ document.addEventListener('keydown', (e) => {
 (async () => {
   runLaunchSequence().catch(() => {});
   setPreviewDefaults();
+  renderUsageState({ requiresLogin: true });
+  startUsagePolling();
   await enumerateCameras().catch(() => {});
   try {
     const appConfig = await window.chimera.getAppConfig();
@@ -2630,6 +2769,7 @@ document.addEventListener('keydown', (e) => {
     if (licenseLoggedIn) {
       hideKeyContactPopup();
       await refreshNotifications(true);
+      await refreshUsage();
     } else {
       showKeyContactPopup();
     }
@@ -2652,6 +2792,7 @@ document.addEventListener('keydown', (e) => {
       btnStop.style.display  = 'block';
       setLog('Reconnecting...');
       await startStreaming(data.endpoint.ip, data.endpoint.port);
+      refreshUsage({ silent: true }).catch(() => {});
     } else {
       setCurrentPod(null);
     }

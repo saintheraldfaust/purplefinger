@@ -368,6 +368,22 @@ ipcMain.handle('get-license-session', async () => ({
   user: licenseSessionUser,
 }));
 
+ipcMain.handle('get-usage', async () => {
+  ensureBackendConfig();
+  if (!licenseSessionToken) {
+    return { ok: false, usage: null, requiresLogin: true };
+  }
+  try {
+    const res = await axios.get(`${appConfig.backendUrl}/me/usage`, {
+      headers: { authorization: `Bearer ${licenseSessionToken}` },
+      timeout: 10000,
+    });
+    return res.data;
+  } catch (err) {
+    throw new Error(formatBackendError(err, 'Failed to load usage'));
+  }
+});
+
 ipcMain.handle('get-user-notifications', async (_event, includeRead = false) => {
   ensureBackendConfig();
   if (!licenseSessionToken) {
