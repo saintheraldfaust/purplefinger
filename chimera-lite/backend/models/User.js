@@ -12,6 +12,7 @@ const userSchema = new mongoose.Schema(
     voiceCharsUsed: { type: Number, default: 0 },
     sessionStartedAt: { type: Date, default: null },
     sessionEndsAt: { type: Date, default: null },
+    sessionMsUsed: { type: Number, default: 0 },
     sessionCooldownUntil: { type: Date, default: null },
   },
   {

@@ -235,14 +235,40 @@ class LicenseStore {
     if (!user) throw new Error('user not found');
 
     const nowMs = Date.now();
+    const hasLegacyCooldown = (user.sessionMsUsed === undefined || user.sessionMsUsed === null) && !!user.sessionCooldownUntil;
+    if (hasLegacyCooldown) {
+      user.sessionStartedAt = null;
+      user.sessionEndsAt = null;
+      user.sessionMsUsed = 0;
+      user.sessionCooldownUntil = null;
+    }
+
+    const previousCooldownUntilMs = user.sessionCooldownUntil ? user.sessionCooldownUntil.getTime() : 0;
+    if (previousCooldownUntilMs && nowMs >= previousCooldownUntilMs) {
+      user.sessionStartedAt = null;
+      user.sessionEndsAt = null;
+      user.sessionMsUsed = 0;
+      user.sessionCooldownUntil = null;
+    }
+
     const cooldownUntilMs = user.sessionCooldownUntil ? user.sessionCooldownUntil.getTime() : 0;
     if (cooldownUntilMs && nowMs < cooldownUntilMs) {
       return { ok: false, cooldownUntil: user.sessionCooldownUntil, sessionEndsAt: user.sessionEndsAt };
     }
 
+    const usedMs = Math.max(0, Math.min(sessionMs, Number(user.sessionMsUsed || 0)));
+    const remainingMs = Math.max(0, sessionMs - usedMs);
+    if (remainingMs <= 0) {
+      user.sessionStartedAt = null;
+      user.sessionEndsAt = null;
+      user.sessionCooldownUntil = new Date(nowMs + cooldownMs);
+      await user.save();
+      return { ok: false, cooldownUntil: user.sessionCooldownUntil, sessionEndsAt: null };
+    }
+
     user.sessionStartedAt = new Date(nowMs);
-    user.sessionEndsAt = new Date(nowMs + sessionMs);
-    user.sessionCooldownUntil = new Date(nowMs + sessionMs + cooldownMs);
+    user.sessionEndsAt = new Date(nowMs + remainingMs);
+    user.sessionCooldownUntil = null;
     await user.save();
 
     return {
@@ -250,12 +276,53 @@ class LicenseStore {
       sessionStartedAt: user.sessionStartedAt,
       sessionEndsAt: user.sessionEndsAt,
       cooldownUntil: user.sessionCooldownUntil,
+      usedMs,
+      remainingMs,
+    };
+  }
+
+  async finalizeSessionUsage(userId, options = {}) {
+    const sessionMs = Number(options.sessionMs || 60 * 60 * 1000);
+    const cooldownMs = Number(options.cooldownMs || 60 * 60 * 1000);
+    const endedAtMs = Math.max(0, Number(options.endedAtMs || Date.now()));
+    const user = await User.findById(userId);
+    if (!user) throw new Error('user not found');
+
+    const hasLegacyCooldown = (user.sessionMsUsed === undefined || user.sessionMsUsed === null) && !!user.sessionCooldownUntil;
+    if (hasLegacyCooldown) {
+      user.sessionMsUsed = 0;
+      user.sessionCooldownUntil = null;
+    }
+
+    const cooldownUntilMs = user.sessionCooldownUntil ? user.sessionCooldownUntil.getTime() : 0;
+    if (cooldownUntilMs && endedAtMs >= cooldownUntilMs) {
+      user.sessionMsUsed = 0;
+      user.sessionCooldownUntil = null;
+    }
+
+    const startedAtMs = user.sessionStartedAt ? user.sessionStartedAt.getTime() : 0;
+    const baseUsedMs = Math.max(0, Math.min(sessionMs, Number(user.sessionMsUsed || 0)));
+    const segmentUsedMs = startedAtMs ? Math.max(0, endedAtMs - startedAtMs) : 0;
+    const totalUsedMs = Math.min(sessionMs, baseUsedMs + segmentUsedMs);
+
+    user.sessionMsUsed = totalUsedMs;
+    user.sessionStartedAt = null;
+    user.sessionEndsAt = null;
+    user.sessionCooldownUntil = totalUsedMs >= sessionMs ? new Date(endedAtMs + cooldownMs) : null;
+    await user.save();
+
+    return {
+      ok: true,
+      usedMs: user.sessionMsUsed,
+      remainingMs: Math.max(0, sessionMs - user.sessionMsUsed),
+      cooldownUntil: user.sessionCooldownUntil,
     };
   }
 
   async getUsageSnapshot(userId, options = {}) {
     const voiceLimit = Number(options.voiceLimit || 5000);
     const voiceWindowMs = Number(options.voiceWindowMs || 60 * 60 * 1000);
+    const sessionLimitMs = Number(options.sessionMs || 60 * 60 * 1000);
     const user = await User.findById(userId).lean();
     if (!user) throw new Error('user not found');
 
@@ -266,9 +333,14 @@ class LicenseStore {
     const voiceResetAt = new Date((voiceExpired ? nowMs : voiceStartMs) + voiceWindowMs);
 
     const sessionEndsAt = user.sessionEndsAt ? new Date(user.sessionEndsAt) : null;
-    const cooldownUntil = user.sessionCooldownUntil ? new Date(user.sessionCooldownUntil) : null;
     const ownedActive = options.activeSession && String(options.activeSession.ownerUserId || '') === String(user._id || '');
     const sessionActive = !!(ownedActive && sessionEndsAt && sessionEndsAt.getTime() > nowMs);
+    const hasLegacyCooldown = (user.sessionMsUsed === undefined || user.sessionMsUsed === null) && !!user.sessionCooldownUntil;
+    const cooldownUntil = hasLegacyCooldown ? null : (user.sessionCooldownUntil ? new Date(user.sessionCooldownUntil) : null);
+    const baseUsedMs = Math.max(0, Math.min(sessionLimitMs, Number(user.sessionMsUsed || 0)));
+    const liveSegmentMs = sessionActive && user.sessionStartedAt ? Math.max(0, nowMs - new Date(user.sessionStartedAt).getTime()) : 0;
+    const usedMs = Math.min(sessionLimitMs, baseUsedMs + liveSegmentMs);
+    const remainingMs = Math.max(0, sessionLimitMs - usedMs);
 
     return {
       voice: {
@@ -279,10 +351,13 @@ class LicenseStore {
         resetInMs: Math.max(0, voiceResetAt.getTime() - nowMs),
       },
       session: {
+        limitMs: sessionLimitMs,
         active: sessionActive,
+        usedMs,
+        remainingMs,
         startedAt: user.sessionStartedAt || null,
         endsAt: sessionEndsAt,
-        activeRemainingMs: sessionActive && sessionEndsAt ? Math.max(0, sessionEndsAt.getTime() - nowMs) : 0,
+        activeRemainingMs: sessionActive ? remainingMs : 0,
         cooldownUntil,
         cooldownRemainingMs: cooldownUntil ? Math.max(0, cooldownUntil.getTime() - nowMs) : 0,
       },

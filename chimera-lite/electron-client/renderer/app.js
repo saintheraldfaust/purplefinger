@@ -295,8 +295,8 @@ function renderUsageState(state = {}) {
   }
 
   if (session.active) {
-    if (sessionUsageLine) sessionUsageLine.textContent = `Session: active • ${formatUsageDuration(session.activeRemainingMs)} left in this 1-hour window`;
-    if (sessionResetLine) sessionResetLine.textContent = `Cooldown reset: ${formatUsageTimestamp(session.cooldownUntil)}`;
+    if (sessionUsageLine) sessionUsageLine.textContent = `Session: active • ${formatUsageDuration(session.activeRemainingMs || session.remainingMs)} left of 1 hour total`;
+    if (sessionResetLine) sessionResetLine.textContent = `Used so far: ${formatUsageDuration(session.usedMs)} • cooldown starts only after the full hour is used`;
     return;
   }
 
@@ -306,8 +306,8 @@ function renderUsageState(state = {}) {
     return;
   }
 
-  if (sessionUsageLine) sessionUsageLine.textContent = 'Session: ready • up to 1 hour available';
-  if (sessionResetLine) sessionResetLine.textContent = 'Cooldown reset: ready now';
+  if (sessionUsageLine) sessionUsageLine.textContent = `Session: ready • ${formatUsageDuration(session.remainingMs || session.limitMs || 0)} remaining of 1 hour total`;
+  if (sessionResetLine) sessionResetLine.textContent = `Used so far: ${formatUsageDuration(session.usedMs)} • cooldown reset: ready now`;
 }
 
 async function refreshUsage(options = {}) {

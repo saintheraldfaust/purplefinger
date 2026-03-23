@@ -38,6 +38,21 @@ function formatCooldownMessage(resetAt, prefix) {
   return `${prefix} Please wait until ${date ? date.toLocaleString() : 'the reset window ends'} before trying again.`;
 }
 
+async function finalizeOwnedSessionUsage(session, endedAtMs = Date.now()) {
+  const ownerUserId = String(session?.ownerUserId || '').trim();
+  if (!ownerUserId) return null;
+  try {
+    return await licenseStore.finalizeSessionUsage(ownerUserId, {
+      sessionMs: config.SESSION_MAX_MS,
+      cooldownMs: config.SESSION_COOLDOWN_MS,
+      endedAtMs,
+    });
+  } catch (err) {
+    console.error('Failed to finalize session usage:', err.message);
+    return null;
+  }
+}
+
 function formatStartError(err) {
   const message = String(err?.message || 'Failed to start pod').trim();
   if (/no longer any instances available|no gpu capacity/i.test(message)) {
@@ -178,6 +193,7 @@ app.get('/me/usage', requireLicensedUser, async (req, res) => {
     const usage = await licenseStore.getUsageSnapshot(req.licenseUser._id, {
       voiceLimit: config.VOICE_CHAR_LIMIT,
       voiceWindowMs: config.VOICE_WINDOW_MS,
+      sessionMs: config.SESSION_MAX_MS,
       activeSession,
     });
     res.json({ ok: true, usage });
@@ -434,6 +450,7 @@ app.post('/stop', requireAccess, async (req, res) => {
   }
 
   const { podId } = session;
+  await finalizeOwnedSessionUsage(session);
   clearActiveSession();
 
   const stopPromise = stopPod(podId)
@@ -751,6 +768,7 @@ function scheduleSessionTimeout(podId, timeoutMs) {
     console.log('Session timeout — terminating pod', podId);
     await stopPod(podId).catch(console.error);
     if (activeSession?.podId === podId) {
+      await finalizeOwnedSessionUsage(activeSession);
       clearActiveSession();
     }
   }, timeoutMs);
@@ -812,6 +830,7 @@ async function verifySessionStillLive(session) {
     const endpoint = extractEndpoint(pod);
     const desiredStatus = String(pod?.desiredStatus || '').toUpperCase();
     if (!endpoint || ['EXITED', 'FAILED', 'TERMINATED'].includes(desiredStatus)) {
+      await finalizeOwnedSessionUsage(session);
       clearActiveSession();
       return null;
     }
@@ -821,6 +840,7 @@ async function verifySessionStillLive(session) {
     return session;
   } catch (err) {
     console.error('Failed to verify session state:', err.message);
+    await finalizeOwnedSessionUsage(session);
     clearActiveSession();
     return null;
   }
