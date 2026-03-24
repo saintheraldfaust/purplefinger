@@ -252,13 +252,15 @@ class LicenseStore {
     }
 
     const cooldownUntilMs = user.sessionCooldownUntil ? user.sessionCooldownUntil.getTime() : 0;
-    if (cooldownUntilMs && nowMs < cooldownUntilMs) {
-      return { ok: false, cooldownUntil: user.sessionCooldownUntil, sessionEndsAt: user.sessionEndsAt };
-    }
+    // TEMP: cooldown/session limit bypassed for testing
+    // if (cooldownUntilMs && nowMs < cooldownUntilMs) {
+    //   return { ok: false, cooldownUntil: user.sessionCooldownUntil, sessionEndsAt: user.sessionEndsAt };
+    // }
 
     const usedMs = Math.max(0, Math.min(sessionMs, Number(user.sessionMsUsed || 0)));
-    const remainingMs = Math.max(0, sessionMs - usedMs);
-    if (remainingMs <= 0) {
+    // TEMP: always treat remaining as full session for testing
+    const remainingMs = sessionMs;
+    if (false) {
       user.sessionStartedAt = null;
       user.sessionEndsAt = null;
       user.sessionCooldownUntil = new Date(nowMs + cooldownMs);
