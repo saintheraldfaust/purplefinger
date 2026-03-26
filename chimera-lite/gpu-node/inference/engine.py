@@ -103,6 +103,8 @@ class SwapEngine:
 
         self._log_app_model_providers('source analysis', self.source_app)
         self._log_app_model_providers('target analysis', self.target_app)
+        self._verify_gpu_providers(self.source_app, 'source_app', _gpu_ep_names)
+        self._verify_gpu_providers(self.target_app, 'target_app', _gpu_ep_names)
 
         self._source_face = None  # cached after set_identity()
         self._source_img  = None
@@ -128,6 +130,19 @@ class SwapEngine:
                 app_model_providers[name] = session.get_providers()
         if app_model_providers:
             log.info('%s providers: %s', label, app_model_providers)
+
+    @staticmethod
+    def _verify_gpu_providers(app, label, gpu_ep_names):
+        """Raise if any sub-model in a FaceAnalysis app fell back to CPU-only."""
+        for name, model in getattr(app, 'models', {}).items():
+            session = getattr(model, 'session', None)
+            if session is None or not hasattr(session, 'get_providers'):
+                continue
+            providers = set(session.get_providers())
+            if not (gpu_ep_names & providers):
+                raise RuntimeError(
+                    f'{label}/{name} is not using a GPU provider: {list(providers)}'
+                )
 
     def set_detect_every_n(self, n: int):
         self.DETECT_EVERY_N = max(1, int(n))

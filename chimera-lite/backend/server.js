@@ -403,6 +403,10 @@ app.get('/ready', requireAccess, async (req, res) => {
   const url = `http://${session.endpoint.ip}:${session.endpoint.port}/health`;
   try {
     const r = await axios.get(url, { timeout: 3000 });
+    if (r.data.gpu === false) {
+      // GPU failed on this pod — background reprovision should already be in progress
+      return res.json({ ready: false, reason: 'gpu_failure' });
+    }
     if (r.data.ok) {
       session.serverReady = true;
       saveSessionState(session);
@@ -900,7 +904,9 @@ async function getOrRecoverActiveSession() {
   return null;
 }
 
-function ensureServerReadyBackground(session) {
+const MAX_GPU_REPROVISION = 3;
+
+function ensureServerReadyBackground(session, attempt = 1) {
   const { podId, endpoint } = session;
   waitForInferenceServer(endpoint)
     .then(async () => {
@@ -913,7 +919,40 @@ function ensureServerReadyBackground(session) {
         await forwardFaceToGpu(endpoint, uploadedFaceBuffer).catch(console.error);
       }
     })
-    .catch(err => console.error('Inference server never became ready:', err.message));
+    .catch(async (err) => {
+      console.error(`Inference server failed (attempt ${attempt}/${MAX_GPU_REPROVISION}): ${err.message}`);
+
+      // Kill the bad pod (fire-and-forget)
+      stopPod(podId).catch(e => console.error('Failed to stop bad pod:', e.message));
+
+      if (attempt >= MAX_GPU_REPROVISION) {
+        console.error('Max reprovision attempts reached — giving up.');
+        if (activeSession?.podId === podId) clearActiveSession();
+        return;
+      }
+
+      // Auto-reprovision on a (hopefully different) machine
+      console.log(`Reprovisioning GPU pod (attempt ${attempt + 1}/${MAX_GPU_REPROVISION})...`);
+      try {
+        const { pod, gpuType } = await startPod();
+        const newEndpoint = await pollForEndpoint(pod.id);
+        const newSession = setActiveSession({
+          podId: pod.id,
+          endpoint: newEndpoint,
+          serverReady: false,
+          ownerUserId: session.ownerUserId || '',
+          startedAt: session.startedAt,
+          endsAt: session.endsAt,
+          cooldownUntil: session.cooldownUntil,
+          maxDurationMs: session.maxDurationMs,
+        });
+        console.log(`New pod ${pod.id} provisioned on ${gpuType}`);
+        ensureServerReadyBackground(newSession, attempt + 1);
+      } catch (reprovisionErr) {
+        console.error('Reprovisioning failed:', reprovisionErr.message);
+        if (activeSession?.podId === podId) clearActiveSession();
+      }
+    });
 }
 
 async function pollForEndpoint(podId, maxWaitMs = 30 * 60 * 1000, intervalMs = 5000) {
@@ -934,11 +973,21 @@ async function waitForInferenceServer(endpoint, maxWaitMs = 25 * 60 * 1000, inte
   while (Date.now() < deadline) {
     try {
       const res = await axios.get(url, { timeout: 5000 });
+      // Server responded — check GPU health first
+      if (res.data.gpu === false) {
+        throw Object.assign(
+          new Error(`GPU not available on pod: ${res.data.error || 'CUDA failure'}`),
+          { code: 'GPU_FAILURE' },
+        );
+      }
       if (res.data.ok) {
         console.log('Inference server ready.');
         return;
       }
-    } catch (_) {}
+    } catch (err) {
+      // Propagate GPU failures immediately — no point retrying the same pod
+      if (err.code === 'GPU_FAILURE') throw err;
+    }
     await sleep(intervalMs);
   }
   throw new Error('Inference server did not become ready in time');

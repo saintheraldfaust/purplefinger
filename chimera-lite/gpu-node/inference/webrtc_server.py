@@ -37,7 +37,13 @@ else:
     log.warning('CUDA NOT available — running on CPU, expect slow performance')
 
 # --- Global state ---
-pipeline = FaceSwapPipeline(PipelineConfig())
+_init_error = None
+try:
+    pipeline = FaceSwapPipeline(PipelineConfig())
+except Exception as e:
+    log.error('Pipeline init failed (CUDA / GPU issue): %s', e)
+    pipeline = None
+    _init_error = str(e)
 
 # Pre-warm CUDA allocator so the first client frame doesn't pay JIT cost
 def _cuda_warmup():
@@ -52,7 +58,8 @@ def _cuda_warmup():
     except Exception as e:
         log.warning('CUDA warmup skipped: %s', e)
 
-threading.Thread(target=_cuda_warmup, daemon=True).start()
+if pipeline is not None:
+    threading.Thread(target=_cuda_warmup, daemon=True).start()
 
 # FPS tracking (module-level so it persists across frames)
 _fps_frame_count = 0
@@ -67,6 +74,9 @@ def _full_pipeline(raw_bytes: bytes):
     decode → resize → GPU swap → resize → JPEG encode
     Returns (buf_bytes, frame_ms) or (None, 0) on failure.
     """
+    if pipeline is None:
+        return None, 0.0
+
     arr = np.frombuffer(raw_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
@@ -180,6 +190,8 @@ async def handle_ws(request):
 
 # --- Face upload ---
 async def handle_set_face(request):
+    if pipeline is None:
+        return web.json_response({'error': 'Pipeline not initialised (GPU failure)'}, status=503)
     reader = await request.multipart()
     field = await reader.next()
     data = await field.read()
@@ -195,6 +207,8 @@ async def handle_set_face(request):
 
 
 async def handle_set_mode(request):
+    if pipeline is None:
+        return web.json_response({'error': 'Pipeline not initialised (GPU failure)'}, status=503)
     try:
         data = await request.json()
     except Exception:
@@ -214,7 +228,9 @@ async def handle_set_mode(request):
 
 # --- Health ---
 async def handle_health(request):
-    return web.json_response({'ok': True, 'face_set': pipeline.ready, 'profile': pipeline.profile})
+    if _init_error or pipeline is None:
+        return web.json_response({'ok': False, 'gpu': False, 'error': _init_error or 'Pipeline not initialised'})
+    return web.json_response({'ok': True, 'gpu': True, 'face_set': pipeline.ready, 'profile': pipeline.profile})
 
 
 # --- App setup ---
