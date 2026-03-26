@@ -31,6 +31,8 @@ let activeSession = null; // { podId, endpoint: { ip, port }, timeoutHandle }
 let uploadedFaceBuffer = null;
 let streamProfile = 'realtime';
 let stopInFlight = null;
+let lastActivityAt = null;   // Date.now() of last client interaction
+let idleCheckInterval = null; // interval handle for idle-pod check
 const CONTACT_SAINT_H_MESSAGE = 'Your account is unavailable right now. Please contact Saint H. on WhatsApp: 09065786976.';
 
 function formatCooldownMessage(resetAt, prefix) {
@@ -306,6 +308,7 @@ app.get('/status', requireAccess, async (req, res) => {
   if (!session) {
     return res.json({ active: false, streamProfile });
   }
+  touchActivity();
   res.json({ active: true, podId: session.podId, endpoint: session.endpoint, streamProfile, reused: true });
 });
 
@@ -394,6 +397,7 @@ app.post('/attach-pod', requireAccess, async (req, res) => {
 app.get('/ready', requireAccess, async (req, res) => {
   const session = await getOrRecoverActiveSession();
   if (!session) return res.json({ ready: false, reason: 'no_session' });
+  touchActivity();
   if (session.serverReady) return res.json({ ready: true, reused: true });
   // Do a live check in case the background task already finished
   const url = `http://${session.endpoint.ip}:${session.endpoint.port}/health`;
@@ -420,6 +424,7 @@ app.get('/stream-profile', requireAccess, (req, res) => {
 
 // POST /stream-profile
 app.post('/stream-profile', requireAccess, async (req, res) => {
+  touchActivity();
   const profile = String(req.body?.profile || '').trim().toLowerCase();
   if (!['realtime', 'quality'].includes(profile)) {
     return res.status(400).json({ error: 'Invalid profile' });
@@ -479,6 +484,7 @@ app.post('/upload-face', requireAccess, upload.single('face'), async (req, res) 
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
+  touchActivity();
 
   uploadedFaceBuffer = req.file.buffer;
 
@@ -774,6 +780,32 @@ function scheduleSessionTimeout(podId, timeoutMs) {
   }, timeoutMs);
 }
 
+// --- Idle-pod auto-termination ---
+function touchActivity() {
+  lastActivityAt = Date.now();
+}
+
+function startIdleCheck() {
+  stopIdleCheck(); // clear any existing interval
+  touchActivity();
+  idleCheckInterval = setInterval(async () => {
+    if (!activeSession) { stopIdleCheck(); return; }
+    const idleMs = Date.now() - (lastActivityAt || 0);
+    if (idleMs >= config.IDLE_TIMEOUT_MS) {
+      const { podId } = activeSession;
+      console.log(`Pod ${podId} idle for ${Math.round(idleMs / 1000)}s — auto-terminating.`);
+      await finalizeOwnedSessionUsage(activeSession);
+      clearActiveSession();
+      await stopPod(podId).catch(err => console.error('Idle stop failed:', err.message));
+    }
+  }, 60 * 1000); // check every 60 s
+}
+
+function stopIdleCheck() {
+  if (idleCheckInterval) { clearInterval(idleCheckInterval); idleCheckInterval = null; }
+  lastActivityAt = null;
+}
+
 function setActiveSession(session) {
   if (activeSession?.timeoutHandle) {
     clearTimeout(activeSession.timeoutHandle);
@@ -786,6 +818,7 @@ function setActiveSession(session) {
     timeoutHandle: scheduleSessionTimeout(session.podId, timeoutMs),
   };
   saveSessionState(activeSession);
+  startIdleCheck();
   return activeSession;
 }
 
@@ -793,6 +826,7 @@ function clearActiveSession() {
   if (activeSession?.timeoutHandle) {
     clearTimeout(activeSession.timeoutHandle);
   }
+  stopIdleCheck();
   activeSession = null;
   clearSessionState();
 }
