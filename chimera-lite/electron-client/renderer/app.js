@@ -2432,40 +2432,97 @@ btnStart.addEventListener('click', async () => {
     btnStop.style.display  = 'block';
     btnStop.disabled       = false;
 
+    const gpuLabel = (data.gpuType || '').replace('NVIDIA ', '').replace('GeForce ', '') || 'GPU';
+
     if (data.reused) {
       setLog('Warm pod found. Checking server readiness...');
       updateLoaderText('Waking warm pod...', 'The inference server is booting up.');
     } else {
-      const gpuLabel = (data.gpuType || '').replace('NVIDIA ', '').replace('GeForce ', '') || 'GPU';
       setLog(`Warm pod not available. Waiting for a new ${gpuLabel} pod to finish booting...`);
-      updateLoaderText('Booting inference server...', `New ${gpuLabel} pod is starting. Models are loading.`);
+      updateLoaderText('Booting GPU pod...', `New ${gpuLabel} pod is starting up.`);
     }
+
+    // If the backend returned without an endpoint (provisioning in background),
+    // poll /status until the endpoint appears.
+    let endpoint = data.endpoint;
+    if (!endpoint) {
+      const startedAt = Date.now();
+      let dots = 0;
+      while (true) {
+        await new Promise(r => setTimeout(r, 3000));
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        dots = (dots + 1) % 4;
+        const d = '.'.repeat(dots + 1);
+        setLog(`Waiting for ${gpuLabel} pod endpoint${d}  ${elapsed}s`);
+        updateLoaderText('Provisioning GPU...', `Waiting for pod to get a public endpoint. ${elapsed}s elapsed.`);
+        try {
+          const s = await window.chimera.getStatus();
+          if (!s.active) throw new Error('Session was lost during provisioning.');
+          if (s.endpoint) {
+            endpoint = s.endpoint;
+            setCurrentPod(data.podId, endpoint);
+            break;
+          }
+        } catch (statusErr) {
+          if (statusErr.message.includes('Session was lost')) throw statusErr;
+        }
+      }
+    }
+
+    setLog('Pod running. Waiting for inference server...');
+    updateLoaderText('Booting inference server...', `${gpuLabel} pod is ready. Models are loading.`);
 
     // Poll /ready until the inference server is accepting connections.
     // Show elapsed time so the user knows it's working, not frozen.
-    const startedAt = Date.now();
-    let dots = 0;
+    const readyStartedAt = Date.now();
+    let readyDots = 0;
     while (true) {
       await new Promise(r => setTimeout(r, 4000));
-      const elapsed = Math.round((Date.now() - startedAt) / 1000);
-      dots = (dots + 1) % 4;
-      const d = '.'.repeat(dots + 1);
-      const prefix = data.reused ? 'Warm pod waking' : 'Provisioning and starting server';
+      const elapsed = Math.round((Date.now() - readyStartedAt) / 1000);
+      readyDots = (readyDots + 1) % 4;
+      const d = '.'.repeat(readyDots + 1);
+      const prefix = data.reused ? 'Warm pod waking' : 'Loading models';
       setLog(`${prefix}${d}  ${elapsed}s`);
       try {
         const r = await window.chimera.checkReady();
         if (r.ready) break;
-      } catch (_) {}
+        if (r.reason === 'gpu_failure' || r.reason === 'provisioning') {
+          setLog('GPU issue — reprovisioning on a different machine...');
+          updateLoaderText('Switching machine...', 'Auto-reprovisioning on a new GPU. Please wait.');
+          // Backend may have started a new pod — refresh endpoint.
+          try {
+            const s = await window.chimera.getStatus();
+            if (!s.active) throw new Error('Session was lost during reprovisioning.');
+            if (s.endpoint) {
+              endpoint = s.endpoint;
+              setCurrentPod(s.podId, endpoint);
+            }
+          } catch (statusErr) {
+            if (statusErr.message.includes('Session was lost')) throw statusErr;
+          }
+        }
+      } catch (readyErr) {
+        if (readyErr.message?.includes('Session was lost')) throw readyErr;
+      }
     }
+
+    // Refresh endpoint one final time from backend (pod may have changed during reprovision)
+    try {
+      const finalStatus = await window.chimera.getStatus();
+      if (finalStatus.endpoint) {
+        endpoint = finalStatus.endpoint;
+        setCurrentPod(finalStatus.podId, endpoint);
+      }
+    } catch (_) {}
 
     updateLoaderText('Connecting stream...', 'GPU pod is ready. Opening camera and WebSocket...');
 
     setStatus('Active', 'active');
-    setLog(`Streaming — ${data.endpoint.ip}:${data.endpoint.port}`);
+    setLog(`Streaming — ${endpoint.ip}:${endpoint.port}`);
     btnUpload.disabled = false;
     refreshUsage({ silent: true }).catch(() => {});
 
-    await startStreaming(data.endpoint.ip, data.endpoint.port);
+    await startStreaming(endpoint.ip, endpoint.port);
   } catch (err) {
     stopBeeping();
     setStatus('Error', 'error');

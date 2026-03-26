@@ -309,6 +309,10 @@ app.get('/status', requireAccess, async (req, res) => {
     return res.json({ active: false, streamProfile });
   }
   touchActivity();
+  // endpoint is null while the pod is still booting (pollForEndpoint running in background)
+  if (!session.endpoint) {
+    return res.json({ active: true, podId: session.podId, endpoint: null, provisioning: true, streamProfile });
+  }
   res.json({ active: true, podId: session.podId, endpoint: session.endpoint, streamProfile, reused: true });
 });
 
@@ -347,12 +351,11 @@ app.post('/start', requireAccess, async (req, res) => {
     const { pod, gpuType } = await startPod();
     const podId = pod.id;
 
-    // Poll until the pod is running and we have a public port (~1-2 min)
-    const endpoint = await pollForEndpoint(podId);
-
+    // Create session immediately (endpoint=null until pod is fully up).
+    // Respond fast so Render's proxy never 502s on us.
     setActiveSession({
       podId,
-      endpoint,
+      endpoint: null,
       serverReady: false,
       ownerUserId: req.auth?.type === 'license' ? String(req.auth.user?._id || '') : '',
       startedAt: sessionWindow?.sessionStartedAt || new Date(),
@@ -361,12 +364,11 @@ app.post('/start', requireAccess, async (req, res) => {
       maxDurationMs: req.auth?.type === 'license' ? config.SESSION_MAX_MS : config.SESSION_TIMEOUT_MS,
     });
 
-    // Return endpoint immediately — client can show progress while server boots.
-    // Inference server readiness check runs in background.
-    res.json({ ok: true, podId, endpoint, gpuType });
+    // Return immediately — client polls /status until endpoint appears.
+    res.json({ ok: true, podId, gpuType, provisioning: true });
 
-    // Background: wait for inference server then forward face if needed
-    ensureServerReadyBackground(activeSession);
+    // Background: wait for endpoint, then wait for inference server
+    provisionInBackground(podId, sessionWindow);
 
   } catch (err) {
     console.error('Failed to start pod:', err.message);
@@ -398,6 +400,7 @@ app.get('/ready', requireAccess, async (req, res) => {
   const session = await getOrRecoverActiveSession();
   if (!session) return res.json({ ready: false, reason: 'no_session' });
   touchActivity();
+  if (!session.endpoint) return res.json({ ready: false, reason: 'provisioning' });
   if (session.serverReady) return res.json({ ready: true, reused: true });
   // Do a live check in case the background task already finished
   const url = `http://${session.endpoint.ip}:${session.endpoint.port}/health`;
@@ -867,14 +870,18 @@ async function verifySessionStillLive(session) {
     const pod = await getPodStatus(session.podId);
     const endpoint = extractEndpoint(pod);
     const desiredStatus = String(pod?.desiredStatus || '').toUpperCase();
-    if (!endpoint || ['EXITED', 'FAILED', 'TERMINATED'].includes(desiredStatus)) {
+    if (['EXITED', 'FAILED', 'TERMINATED'].includes(desiredStatus)) {
       await finalizeOwnedSessionUsage(session);
       clearActiveSession();
       return null;
     }
 
-    session.endpoint = endpoint;
-    saveSessionState(session);
+    // endpoint may be null while pod is still booting (provisioning in background).
+    // Only update if we got one; don't nuke a provisioning session.
+    if (endpoint) {
+      session.endpoint = endpoint;
+      saveSessionState(session);
+    }
     return session;
   } catch (err) {
     console.error('Failed to verify session state:', err.message);
@@ -902,6 +909,25 @@ async function getOrRecoverActiveSession() {
 
   clearSessionState();
   return null;
+}
+
+function provisionInBackground(podId) {
+  pollForEndpoint(podId)
+    .then(async (endpoint) => {
+      if (!activeSession || activeSession.podId !== podId) return;
+      activeSession.endpoint = endpoint;
+      saveSessionState(activeSession);
+      console.log(`Pod ${podId} endpoint ready: ${endpoint.ip}:${endpoint.port}`);
+      ensureServerReadyBackground(activeSession);
+    })
+    .catch(async (err) => {
+      console.error(`Pod ${podId} never got an endpoint: ${err.message}`);
+      if (activeSession?.podId === podId) {
+        await finalizeOwnedSessionUsage(activeSession);
+        clearActiveSession();
+      }
+      stopPod(podId).catch(e => console.error('Failed to stop orphan pod:', e.message));
+    });
 }
 
 const MAX_GPU_REPROVISION = 3;
@@ -935,10 +961,9 @@ function ensureServerReadyBackground(session, attempt = 1) {
       console.log(`Reprovisioning GPU pod (attempt ${attempt + 1}/${MAX_GPU_REPROVISION})...`);
       try {
         const { pod, gpuType } = await startPod();
-        const newEndpoint = await pollForEndpoint(pod.id);
         const newSession = setActiveSession({
           podId: pod.id,
-          endpoint: newEndpoint,
+          endpoint: null,
           serverReady: false,
           ownerUserId: session.ownerUserId || '',
           startedAt: session.startedAt,
@@ -946,8 +971,21 @@ function ensureServerReadyBackground(session, attempt = 1) {
           cooldownUntil: session.cooldownUntil,
           maxDurationMs: session.maxDurationMs,
         });
-        console.log(`New pod ${pod.id} provisioned on ${gpuType}`);
-        ensureServerReadyBackground(newSession, attempt + 1);
+        console.log(`New pod ${pod.id} created on ${gpuType} — waiting for endpoint...`);
+        // Poll for endpoint, then run ensureServerReadyBackground with incremented attempt
+        pollForEndpoint(pod.id)
+          .then(async (newEndpoint) => {
+            if (!activeSession || activeSession.podId !== pod.id) return;
+            activeSession.endpoint = newEndpoint;
+            saveSessionState(activeSession);
+            console.log(`Reprovision pod ${pod.id} endpoint ready: ${newEndpoint.ip}:${newEndpoint.port}`);
+            ensureServerReadyBackground(activeSession, attempt + 1);
+          })
+          .catch(async (pollErr) => {
+            console.error(`Reprovision pod ${pod.id} never got endpoint: ${pollErr.message}`);
+            if (activeSession?.podId === pod.id) clearActiveSession();
+            stopPod(pod.id).catch(e => console.error('Failed to stop orphan pod:', e.message));
+          });
       } catch (reprovisionErr) {
         console.error('Reprovisioning failed:', reprovisionErr.message);
         if (activeSession?.podId === podId) clearActiveSession();
