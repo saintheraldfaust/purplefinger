@@ -8,45 +8,42 @@ const headers = () => ({
   Authorization: `Bearer ${config.RUNPOD_API_KEY}`,
 });
 
+const CAPACITY_RE = /no longer any instances|no available gpu|capacity|no gpu|does not have the resources|insufficient resources|out of stock/i;
+
 async function startPod() {
   const chain = config.RUNPOD_GPU_FALLBACK_CHAIN;
   if (!chain || chain.length === 0) {
     throw new Error('No GPUs configured in RUNPOD_GPU_FALLBACK_CHAIN');
   }
 
-  // --- Volume logic (commented out — region-locks GPU availability) ---
-  // if (config.RUNPOD_NETWORK_VOLUME_ID) {
-  //   try {
-  //     const pod = await _deployPod(chain[0], config.RUNPOD_NETWORK_VOLUME_ID);
-  //     console.log(`Pod started WITH network volume (${config.RUNPOD_NETWORK_VOLUME_ID})`);
-  //     return { pod, gpuType: chain[0] };
-  //   } catch (err) {
-  //     const msg = String(err?.message || '').toLowerCase();
-  //     const isCapacity = /no longer any instances|no available gpu|capacity|no gpu/i.test(msg);
-  //     if (!isCapacity) throw err;
-  //     console.log(`No GPUs available with volume — falling through to chain...`);
-  //   }
-  // }
+  const maxRetries = config.GPU_START_MAX_RETRIES || 5;
+  const retryDelay = config.GPU_START_RETRY_DELAY_MS || 15000;
 
-  // Walk the chain cheapest-first; skip capacity errors, throw real errors.
-  let lastErr = null;
-  for (const gpuType of chain) {
-    try {
-      console.log(`Trying GPU: ${gpuType}...`);
-      const pod = await _deployPod(gpuType, null);
-      console.log(`Pod started on ${gpuType}`);
-      return { pod, gpuType };
-    } catch (err) {
-      const msg = String(err?.message || '');
-      const isCapacity = /no longer any instances|no available gpu|capacity|no gpu/i.test(msg);
-      if (!isCapacity) throw err; // real error — abort
-      console.log(`No capacity for ${gpuType}, trying next...`);
-      lastErr = err;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    // Walk the chain cheapest-first; skip capacity errors, throw real errors.
+    let lastErr = null;
+    for (const gpuType of chain) {
+      try {
+        console.log(`[Attempt ${attempt}/${maxRetries}] Trying GPU: ${gpuType}...`);
+        const pod = await _deployPod(gpuType, null);
+        console.log(`Pod started on ${gpuType} (attempt ${attempt})`);
+        return { pod, gpuType };
+      } catch (err) {
+        const msg = String(err?.message || '');
+        if (!CAPACITY_RE.test(msg)) throw err; // real error — abort
+        console.log(`No capacity for ${gpuType}, trying next...`);
+        lastErr = err;
+      }
+    }
+
+    // All GPUs exhausted for this attempt
+    if (attempt < maxRetries) {
+      console.log(`All GPUs exhausted on attempt ${attempt}/${maxRetries}. Retrying in ${retryDelay / 1000}s...`);
+      await new Promise(r => setTimeout(r, retryDelay));
+    } else {
+      throw lastErr || new Error('No GPU capacity available on any configured type');
     }
   }
-
-  // All GPUs exhausted
-  throw lastErr || new Error('No GPU capacity available on any configured type');
 }
 
 async function _deployPod(gpuType, networkVolumeId) {

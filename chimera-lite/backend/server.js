@@ -57,7 +57,7 @@ async function finalizeOwnedSessionUsage(session, endedAtMs = Date.now()) {
 
 function formatStartError(err) {
   const message = String(err?.message || 'Failed to start pod').trim();
-  if (/no longer any instances available|no gpu capacity/i.test(message)) {
+  if (/no longer any instances|no gpu capacity|does not have the resources|insufficient resources|out of stock/i.test(message)) {
     return 'All GPU types are at capacity right now. Please wait a minute and retry.';
   }
   return message;

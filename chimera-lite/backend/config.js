@@ -26,6 +26,8 @@ module.exports = {
   // Volume commented out — no longer used (region-locks GPU availability).
   RUNPOD_WARM_POD_ID: process.env.RUNPOD_WARM_POD_ID || null,
   RUNPOD_CONTAINER_DISK_GB: 40,
+  GPU_START_MAX_RETRIES: Number(process.env.GPU_START_MAX_RETRIES || 5),
+  GPU_START_RETRY_DELAY_MS: Number(process.env.GPU_START_RETRY_DELAY_MS || 15000), // 15 s
   SESSION_STATE_FILE: process.env.SESSION_STATE_FILE || '.session-state.json',
   SESSION_TIMEOUT_MS: 3 * 60 * 60 * 1000, // 3 hours
   IDLE_TIMEOUT_MS: Number(process.env.IDLE_TIMEOUT_MS || 10 * 60 * 1000), // 10 min
