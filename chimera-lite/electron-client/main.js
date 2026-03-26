@@ -61,6 +61,24 @@ let appConfig = {
 let licenseSessionToken = '';
 let licenseSessionUser = null;
 
+async function autoLoginSavedKey() {
+  const savedKey = appConfig.licenseKey;
+  if (!savedKey || !appConfig.backendUrl) return;
+  try {
+    console.log('[AutoLogin] Restoring session for saved product key...');
+    const res = await axios.post(`${appConfig.backendUrl}/auth/product-login`, { productKey: savedKey }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 10000,
+    });
+    licenseSessionToken = String(res.data?.token || '').trim();
+    licenseSessionUser = res.data?.user || null;
+    console.log('[AutoLogin] Session restored successfully.');
+  } catch (err) {
+    console.warn('[AutoLogin] Failed to restore session:', err?.response?.data?.error || err.message);
+    // Don't clear the saved key — let the user retry manually
+  }
+}
+
 function getAuthHeaders() {
   if (licenseSessionToken) {
     return { authorization: `Bearer ${licenseSessionToken}` };
@@ -240,6 +258,10 @@ app.whenReady().then(() => {
       callback(permission === 'media');
     });
   });
+
+  // Auto-login with saved product key (non-blocking)
+  autoLoginSavedKey().catch(() => {});
+
   startObsServer()
     .then(() => createWindow())
     .catch((err) => {

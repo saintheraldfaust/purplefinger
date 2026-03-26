@@ -2057,7 +2057,7 @@ btnModeQuality.addEventListener('click', () => setProfile('quality'));
 btnReconnect.addEventListener('click', () => doReconnect());
 
 // --- Privacy Shield toggle (header button) ---
-let _privacyShieldEnabled = true;
+let _privacyShieldEnabled = false;
 const shieldTooltipStatus = document.getElementById('shield-tooltip-status');
 btnPrivacyShield.addEventListener('click', () => {
   _privacyShieldEnabled = !_privacyShieldEnabled;
@@ -2068,6 +2068,12 @@ btnPrivacyShield.addEventListener('click', () => {
   }
   if (!_privacyShieldEnabled) hidePrivacyShield();
 });
+// Sync initial button appearance with default state
+btnPrivacyShield.classList.toggle('shield-active', _privacyShieldEnabled);
+if (shieldTooltipStatus) {
+  shieldTooltipStatus.textContent = _privacyShieldEnabled ? '● ON' : '● OFF';
+  shieldTooltipStatus.classList.toggle('off', !_privacyShieldEnabled);
+}
 btnSaveConfig.addEventListener('click', async () => {
   if (ws || localStream || gpuIp) {
     setConfigNote('Stop the current session before changing connection settings.');
