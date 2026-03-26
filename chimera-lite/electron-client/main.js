@@ -259,10 +259,9 @@ app.whenReady().then(() => {
     });
   });
 
-  // Auto-login with saved product key (non-blocking)
-  autoLoginSavedKey().catch(() => {});
-
+  // Auto-login with saved product key, then open window
   startObsServer()
+    .then(() => autoLoginSavedKey().catch(() => {}))
     .then(() => createWindow())
     .catch((err) => {
       console.error('Failed to start OBS relay:', err.message);
