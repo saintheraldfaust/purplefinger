@@ -33,6 +33,7 @@ let streamProfile = 'realtime';
 let stopInFlight = null;
 let lastActivityAt = null;   // Date.now() of last client interaction
 let idleCheckInterval = null; // interval handle for idle-pod check
+let _reprovisionInFlight = false; // true while ensureServerReadyBackground is reprovisioning
 const CONTACT_SAINT_H_MESSAGE = 'Your account is unavailable right now. Please contact Saint H. on WhatsApp: 09065786976.';
 
 function formatCooldownMessage(resetAt, prefix) {
@@ -306,6 +307,11 @@ app.post('/admin/notifications', requireAdmin, async (req, res) => {
 app.get('/status', requireAccess, async (req, res) => {
   const session = await getOrRecoverActiveSession();
   if (!session) {
+    // During reprovision the old session is cleared momentarily before the
+    // new one is set.  Tell the client we're still alive so it doesn't bail.
+    if (_reprovisionInFlight) {
+      return res.json({ active: true, endpoint: null, provisioning: true, reprovisioning: true, streamProfile });
+    }
     return res.json({ active: false, streamProfile });
   }
   touchActivity();
@@ -866,6 +872,10 @@ async function adoptExistingPod(podId, options = {}) {
 }
 
 async function verifySessionStillLive(session) {
+  // While reprovisioning, the old pod will show as TERMINATED.
+  // Don't nuke the session — the reprovision handler will replace it.
+  if (_reprovisionInFlight) return session;
+
   try {
     const pod = await getPodStatus(session.podId);
     const endpoint = extractEndpoint(pod);
@@ -953,9 +963,14 @@ function ensureServerReadyBackground(session, attempt = 1) {
 
       if (attempt >= MAX_GPU_REPROVISION) {
         console.error('Max reprovision attempts reached — giving up.');
+        _reprovisionInFlight = false;
         if (activeSession?.podId === podId) clearActiveSession();
         return;
       }
+
+      // Lock: prevent verifySessionStillLive from nuking the session
+      // while we spin up a replacement pod.
+      _reprovisionInFlight = true;
 
       // Auto-reprovision on a (hopefully different) machine
       console.log(`Reprovisioning GPU pod (attempt ${attempt + 1}/${MAX_GPU_REPROVISION})...`);
@@ -971,6 +986,7 @@ function ensureServerReadyBackground(session, attempt = 1) {
           cooldownUntil: session.cooldownUntil,
           maxDurationMs: session.maxDurationMs,
         });
+        _reprovisionInFlight = false;
         console.log(`New pod ${pod.id} created on ${gpuType} — waiting for endpoint...`);
         // Poll for endpoint, then run ensureServerReadyBackground with incremented attempt
         pollForEndpoint(pod.id)
@@ -988,6 +1004,7 @@ function ensureServerReadyBackground(session, attempt = 1) {
           });
       } catch (reprovisionErr) {
         console.error('Reprovisioning failed:', reprovisionErr.message);
+        _reprovisionInFlight = false;
         if (activeSession?.podId === podId) clearActiveSession();
       }
     });

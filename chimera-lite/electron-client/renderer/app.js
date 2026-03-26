@@ -2496,15 +2496,20 @@ btnStart.addEventListener('click', async () => {
           setLog('GPU issue — reprovisioning on a different machine...');
           updateLoaderText('Switching machine...', 'Auto-reprovisioning on a new GPU. Please wait.');
           // Backend may have started a new pod — refresh endpoint.
-          try {
-            const s = await window.chimera.getStatus();
-            if (!s.active) throw new Error('Session was lost during reprovisioning.');
-            if (s.endpoint) {
-              endpoint = s.endpoint;
-              setCurrentPod(s.podId, endpoint);
-            }
-          } catch (statusErr) {
-            if (statusErr.message.includes('Session was lost')) throw statusErr;
+          // During reprovision the session may briefly appear inactive;
+          // retry a few times before giving up.
+          let reproGrace = 5;
+          while (reproGrace-- > 0) {
+            try {
+              const s = await window.chimera.getStatus();
+              if (s.active && s.endpoint) {
+                endpoint = s.endpoint;
+                setCurrentPod(s.podId, endpoint);
+                break;
+              }
+              if (s.active) break; // active but no endpoint yet — still provisioning
+            } catch (_) {}
+            await new Promise(r2 => setTimeout(r2, 5000));
           }
         }
       } catch (readyErr) {
