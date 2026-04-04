@@ -225,7 +225,7 @@ function hideLicenseResultPopup() {
 
 function maybeShowKeyContactPopup(message) {
   const text = String(message || '');
-  if (/contact saint h|whatsapp: 09065786976|account is unavailable/i.test(text)) {
+  if (/contact purplefinger support|purplefinger support|account is unavailable/i.test(text)) {
     showKeyContactPopup(true);
   }
 }
@@ -357,28 +357,46 @@ if (licenseResultOverlay) {
   });
 }
 
-if (btnOpenWhatsapp) {
-  btnOpenWhatsapp.addEventListener('click', async () => {
-    const url = 'https://wa.me/2349065786976?text=Hi%20Saint%20H.%20I%20need%20a%20product%20key%20for%20Project%20Purplefinger.';
-    try {
-      if (window.chimera?.openExternal) {
-        const result = await window.chimera.openExternal(url);
-        if (result && result.ok === false) throw new Error(result.error || 'Unable to launch WhatsApp');
-      } else {
-        throw new Error('External opener unavailable');
-      }
-    } catch (err) {
-      try {
-        if (navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(`${url}\nWhatsApp: 09065786976`);
-          setLog('WhatsApp link copied. Open it manually or message 09065786976.');
-        } else {
-          setLog('Open WhatsApp manually: 09065786976');
-        }
-      } catch (_) {
-        setLog('Open WhatsApp manually: 09065786976');
-      }
+async function openTelegramUrl(url) {
+  try {
+    if (window.chimera?.openExternal) {
+      const result = await window.chimera.openExternal(url);
+      if (result && result.ok === false) throw new Error(result.error || 'Unable to open Telegram');
+    } else {
+      throw new Error('External opener unavailable');
     }
+  } catch (err) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+        setLog('Telegram link copied — paste it in your browser.');
+      } else {
+        setLog(`Open Telegram manually: ${url}`);
+      }
+    } catch (_) {
+      setLog(`Open Telegram manually: ${url}`);
+    }
+  }
+}
+
+if (btnOpenWhatsapp) {
+  btnOpenWhatsapp.addEventListener('click', () =>
+    openTelegramUrl('http://t.me/PurpleFsupport')
+  );
+}
+
+const btnOpenTgChannel = document.getElementById('btn-open-tg-channel');
+if (btnOpenTgChannel) {
+  btnOpenTgChannel.addEventListener('click', () =>
+    openTelegramUrl('https://t.me/purplefinger21')
+  );
+}
+
+const brandingTgLink = document.getElementById('branding-tg-link');
+if (brandingTgLink) {
+  brandingTgLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    openTelegramUrl('http://t.me/PurpleFsupport');
   });
 }
 
