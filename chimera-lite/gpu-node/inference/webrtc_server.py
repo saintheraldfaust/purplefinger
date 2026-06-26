@@ -64,6 +64,7 @@ if pipeline is not None:
 # FPS tracking (module-level so it persists across frames)
 _fps_frame_count = 0
 _fps_window_start = 0.0
+_last_out_fps = 0.0   # exposed via /stats
 # Cache JPEG encode param lists to avoid repeated list allocation
 _jpeg_params_cache: dict = {}
 
@@ -126,7 +127,7 @@ async def handle_ws(request):
     _recv_t0 = [0.0]
 
     async def process_loop():
-        global _fps_frame_count, _fps_window_start
+        global _fps_frame_count, _fps_window_start, _last_out_fps
         while not ws.closed:
             await frame_event.wait()
             frame_event.clear()
@@ -156,6 +157,7 @@ async def handle_ws(request):
                 _fps_window_start = now
             elif _fps_frame_count % 30 == 0:
                 fps = 30.0 / max(now - _fps_window_start, 1e-6)
+                _last_out_fps = fps
                 recv_fps = _recv_count / max(now - _recv_t0[0], 1e-6) if _recv_t0[0] else 0
                 total_ms = (now - t_submit) * 1000
                 log.info(
@@ -226,6 +228,16 @@ async def handle_set_mode(request):
     return web.json_response({'ok': True, 'profile': pipeline.profile})
 
 
+# --- Stats (rolling timings, so tuning doesn't require log scraping) ---
+async def handle_stats(request):
+    if pipeline is None:
+        return web.json_response({'error': 'Pipeline not initialised'}, status=503)
+    s = pipeline.get_stats()
+    s['out_fps'] = round(_last_out_fps, 1)
+    s['face_set'] = pipeline.ready
+    return web.json_response(s)
+
+
 # --- Health ---
 async def handle_health(request):
     if _init_error or pipeline is None:
@@ -245,6 +257,7 @@ def build_app():
     cors.add(app.router.add_post('/set-face', handle_set_face))
     cors.add(app.router.add_post('/set-mode', handle_set_mode))
     cors.add(app.router.add_get('/health', handle_health))
+    cors.add(app.router.add_get('/stats', handle_stats))
 
     return app
 

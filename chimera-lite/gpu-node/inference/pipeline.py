@@ -63,6 +63,8 @@ class FaceSwapPipeline:
         self.config = config or PipelineConfig()
         self._frame_idx = 0
         self.profile = 'realtime'
+        self._ema_swap = None      # rolling timings, exposed via /stats
+        self._ema_enhance = None
 
         log.info('Initialising SwapEngine...')
         self.swap = SwapEngine('models/inswapper_128.onnx')
@@ -131,8 +133,18 @@ class FaceSwapPipeline:
                         log.warning('Enhance failed: %s', e)
                 enhance_ms = (time.perf_counter() - t1) * 1000
 
+        self._ema_swap = swap_ms if self._ema_swap is None else 0.85 * self._ema_swap + 0.15 * swap_ms
+        self._ema_enhance = enhance_ms if self._ema_enhance is None else 0.85 * self._ema_enhance + 0.15 * enhance_ms
+
         if self._frame_idx % 30 == 0:
             log.info('swap=%.0fms  enhance=%.0fms  total=%.0fms',
                      swap_ms, enhance_ms, swap_ms + enhance_ms)
 
         return swapped
+
+    def get_stats(self):
+        return {
+            'profile': self.profile,
+            'swap_ms': round(self._ema_swap, 1) if self._ema_swap is not None else None,
+            'enhance_ms': round(self._ema_enhance, 1) if self._ema_enhance is not None else None,
+        }
