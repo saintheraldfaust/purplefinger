@@ -321,6 +321,31 @@ ipcMain.handle('set-stream-profile', async (_event, profile) => {
   return { ok: true, profile: currentProfile };
 });
 
+ipcMain.handle('set-swapper', async (_event, swapper) => {
+  const gpu = parseGpuUrl(appConfig.gpuUrl);
+  if (!gpu) throw new Error('GPU node URL not set');
+  try {
+    const res = await axios.post(`${gpu.httpBase}/set-swapper`, { swapper: String(swapper || '') }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000,
+    });
+    return res.data ?? { ok: true };
+  } catch (err) {
+    throw new Error(formatGpuError(err, 'Failed to set swap model on GPU node'));
+  }
+});
+
+ipcMain.handle('get-stats', async () => {
+  const gpu = parseGpuUrl(appConfig.gpuUrl);
+  if (!gpu) return null;
+  try {
+    const res = await axios.get(`${gpu.httpBase}/stats`, { timeout: 5000 });
+    return res.data ?? null;
+  } catch {
+    return null;
+  }
+});
+
 ipcMain.handle('upload-face', async (_event, buffer, filename) => {
   const gpu = requireGpu();
   const FormData = require('form-data');

@@ -1629,6 +1629,18 @@
       transition: background .15s, color .15s;
     }
     .cf-ghost:hover { background: var(--glass-3); color: var(--text-0); }
+    .seg-row { display: flex; gap: 6px; margin-top: 8px; }
+    .seg-btn {
+      flex: 1 1 0; text-align: center;
+      background: var(--glass-2); border: 1px solid var(--line-1);
+      border-radius: var(--radius); padding: 8px 6px;
+      color: var(--text-1); font-family: var(--font-ui); font-size: 0.72rem;
+      font-weight: 500; cursor: pointer;
+      transition: background .15s, color .15s, border-color .15s;
+    }
+    .seg-btn:hover { background: var(--glass-3); color: var(--text-0); }
+    .seg-btn.active { background: var(--glass-3); color: var(--text-0); border-color: var(--text-2, var(--text-1)); }
+    .seg-btn[disabled] { opacity: 0.38; cursor: not-allowed; }
     #face-input { display: none; }
 
     .cf-connect {
@@ -2313,6 +2325,25 @@
       <div class="drawer-slider"><span>Saturation</span><input type="range" id="ctrl-saturation" min="0.6" max="1.6" step="0.05" value="1.00" /><span class="val" id="val-saturation">1.00</span></div>
       <button id="btn-reset-preview" class="cf-ghost" type="button">Reset preview</button>
       <div class="drawer-hint">Affects only your local preview, not the feed sent to the GPU.</div>
+    </div>
+
+    <div class="drawer-sect">
+      <div class="drawer-label">Swap model</div>
+      <div class="seg-row" id="swapper-row">
+        <button class="seg-btn" data-swapper="inswapper" type="button">inswapper 128</button>
+        <button class="seg-btn" data-swapper="hyperswap" type="button">HyperSwap 256</button>
+        <button class="seg-btn" data-swapper="ghost" type="button">Ghost 256</button>
+      </div>
+      <div class="drawer-hint" id="swapper-hint">256px models are crisper without the heavy enhancer — best paired with the Fast quality below.</div>
+    </div>
+
+    <div class="drawer-sect">
+      <div class="drawer-label">Quality</div>
+      <div class="seg-row" id="quality-row">
+        <button class="seg-btn" data-profile="realtime" type="button">Fast</button>
+        <button class="seg-btn" data-profile="hq" type="button">HQ · enhanced</button>
+      </div>
+      <div class="drawer-hint">HQ adds GFPGAN restoration (heavier, lower fps). 256px models look crisp on Fast.</div>
     </div>
 
     <div class="drawer-sect">

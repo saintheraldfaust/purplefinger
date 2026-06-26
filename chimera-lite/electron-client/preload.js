@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('chimera', {
   stopSession:  () => ipcRenderer.invoke('stop-session'),
   getStreamProfile: () => ipcRenderer.invoke('get-stream-profile'),
   setStreamProfile: (profile) => ipcRenderer.invoke('set-stream-profile', profile),
+  setSwapper: (swapper) => ipcRenderer.invoke('set-swapper', swapper),
+  getStats: () => ipcRenderer.invoke('get-stats'),
   uploadFace:   (buffer, filename) => ipcRenderer.invoke('upload-face', buffer, filename),
   openDriversFolder: () => ipcRenderer.invoke('open-drivers-folder'),
   // Voice changer / LipSync Studio

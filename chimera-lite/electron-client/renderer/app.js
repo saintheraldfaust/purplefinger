@@ -1794,6 +1794,66 @@ async function setProfile(profile, pushToBackend = true) {
   }
 }
 
+// --- Swap model + Quality controls (Config sidebar) ---
+(function wireSwapControls() {
+  const swapRow = document.getElementById('swapper-row');
+  const qualRow = document.getElementById('quality-row');
+
+  function markActive(row, attr, value) {
+    if (!row) return;
+    row.querySelectorAll('.seg-btn').forEach(b =>
+      b.classList.toggle('active', b.getAttribute(attr) === value));
+  }
+
+  if (swapRow) swapRow.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.seg-btn');
+    if (!btn || btn.disabled) return;
+    const name = btn.getAttribute('data-swapper');
+    const prev = swapRow.querySelector('.seg-btn.active');
+    markActive(swapRow, 'data-swapper', name);
+    try {
+      await window.chimera.setSwapper(name);
+      setLog('Swap model → ' + name);
+    } catch (err) {
+      if (prev) markActive(swapRow, 'data-swapper', prev.getAttribute('data-swapper'));
+      setLog('Swap model failed: ' + err.message);
+    }
+  });
+
+  if (qualRow) qualRow.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.seg-btn');
+    if (!btn) return;
+    const profile = btn.getAttribute('data-profile');
+    markActive(qualRow, 'data-profile', profile);
+    try {
+      await window.chimera.setStreamProfile(profile);
+      setLog('Quality → ' + profile);
+    } catch (err) {
+      setLog('Quality failed: ' + err.message);
+    }
+  });
+
+  async function syncFromStats() {
+    try {
+      const s = await window.chimera.getStats();
+      if (!s) return;
+      if (s.swapper) markActive(swapRow, 'data-swapper', s.swapper);
+      if (s.profile) markActive(qualRow, 'data-profile', s.profile);
+      if (Array.isArray(s.available_swappers) && swapRow) {
+        swapRow.querySelectorAll('.seg-btn').forEach(b => {
+          const ok = s.available_swappers.includes(b.getAttribute('data-swapper'));
+          b.disabled = !ok;
+          b.title = ok ? '' : 'Model not loaded on the GPU node';
+        });
+      }
+    } catch (_) { /* node not reachable yet */ }
+  }
+  markActive(swapRow, 'data-swapper', 'inswapper');   // pod boots hq/inswapper
+  markActive(qualRow, 'data-profile', 'hq');
+  setTimeout(syncFromStats, 1500);
+  setInterval(syncFromStats, 10000);
+})();
+
 function startStats() {
   if (statsTimer) clearInterval(statsTimer);
   resetStats();
