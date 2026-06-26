@@ -42,6 +42,18 @@ STREAM_PROFILES = {
         'proc_h': 270,
         'jpeg_quality': 85,
     },
+    # Live-call high quality: GFPGAN restoration EVERY frame (no pulsing) at higher
+    # res — crisps the soft 128px swap. Heavier per frame; TensorRT recovers the fps.
+    'hq': {
+        'enhance_enabled': True,
+        'enhance_every_n': 1,
+        'detect_every_n': 1,
+        'smooth_alpha': 0.85,
+        'stale_face_ttl': 2,
+        'proc_w': 640,
+        'proc_h': 360,
+        'jpeg_quality': 92,
+    },
 }
 
 
