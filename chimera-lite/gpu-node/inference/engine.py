@@ -15,6 +15,8 @@ from types import SimpleNamespace
 
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True  # speed up conv ops after first frame
+    torch.backends.cuda.matmul.allow_tf32 = True   # TF32 matmuls — big speedup, imperceptible quality cost
+    torch.backends.cudnn.allow_tf32 = True
 
 log = logging.getLogger('chimera.engine')
 
@@ -73,7 +75,15 @@ class SwapEngine:
                 'trt_engine_cache_path': '/workspace/models/trt_cache',
                 'trt_timing_cache_enable': True,
             }))
-        _gpu_providers.append('CUDAExecutionProvider')
+        # HEURISTIC, not onnxruntime's default EXHAUSTIVE: the detection model has a
+        # dynamic input shape, and EXHAUSTIVE re-searches every conv algorithm on each
+        # new shape — that re-search blocks the GPU stream and is the source of the
+        # 60-70ms detect/swap/blend spikes on Blackwell (it stalls GFPGAN right after).
+        # HEURISTIC picks a strong algorithm without the per-shape blowup.
+        _gpu_providers.append(('CUDAExecutionProvider', {
+            'cudnn_conv_algo_search': 'HEURISTIC',
+            'do_copy_in_default_stream': True,
+        }))
         _gpu_providers.append('CPUExecutionProvider')
 
         self.source_app = FaceAnalysis(
