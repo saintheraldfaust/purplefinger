@@ -810,6 +810,10 @@ class EnhanceEngine:
 
     WEIGHT = 0.55  # 0=max GFPGAN reconstruction, 1=preserve inswapper
     ENHANCE_EVERY_N = 4  # run GFPGAN every N frames; reuse last result in between
+    # False -> the cloned identity's own mouth (swapped + restored), lip-synced by
+    # inswapper (it keeps your mouth *movement*, changes the identity). True -> paste
+    # your real mouth back (real teeth, but it won't match the cloned face).
+    MOUTH_OVERRIDE = False
 
     def __init__(self, model_path: str = 'models/GFPGANv1.4.pth'):
         from gfpgan import GFPGANer
@@ -908,9 +912,10 @@ class EnhanceEngine:
             frame.astype(np.float32) * (1.0 - mask)
         ).astype(np.uint8)
 
-        # Mouth override: use real camera mouth for inner region.
-        # Real mouth = correct lip sync, correct teeth positions, no hallucination.
-        result = self._apply_mouth_override(result, original_frame if original_frame is not None else frame, kps, h, w)
+        # Mouth override (real camera mouth) — off by default so the cloned identity's
+        # mouth shows. inswapper preserves your mouth movement, so lip-sync is kept.
+        if self.MOUTH_OVERRIDE:
+            result = self._apply_mouth_override(result, original_frame if original_frame is not None else frame, kps, h, w)
         return result
 
     def _apply_mouth_override(self, gfpgan_result, source_frame, kps, h, w):
