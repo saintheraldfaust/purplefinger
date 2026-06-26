@@ -863,15 +863,20 @@ class EnhanceEngine:
 
         aligned = cv2.warpAffine(frame, M, (512, 512), flags=cv2.INTER_LINEAR)
 
-        # has_aligned=True skips RetinaFace — the main cost saving
-        with torch.autocast(device_type='cuda', enabled=(self._device == 'cuda')):
-            _, _, enhanced = self.gfpgan.enhance(
+        # has_aligned=True skips RetinaFace. paste_back=False skips GFPGAN's internal
+        # face-parsing + paste step — we do our own warp/blend below, so that pass was
+        # pure waste. inference_mode drops autograd overhead. Both shave GFPGAN time.
+        with torch.inference_mode(), torch.autocast(device_type='cuda', enabled=(self._device == 'cuda')):
+            _, restored_faces, _ = self.gfpgan.enhance(
                 aligned,
                 has_aligned=True,
                 only_center_face=True,
-                paste_back=True,
+                paste_back=False,
                 weight=self.WEIGHT,
             )
+        if not restored_faces:
+            return frame
+        enhanced = restored_faces[0]
         if enhanced is None or enhanced.size == 0:
             return frame
         if enhanced.dtype != np.uint8:
