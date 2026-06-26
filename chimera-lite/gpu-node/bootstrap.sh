@@ -97,6 +97,20 @@ if [ ! -f "$MODELS_DIR/inswapper_128.onnx" ]; then
   wget -q --show-progress -O "$MODELS_DIR/inswapper_128.onnx" \
     "https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx"
 fi
+
+# Higher-res 256px swappers (FaceFusion assets). Optional — server skips any that are
+# missing. wget -O leaves a 0-byte file on failure, so clean it up if the download fails.
+hires_models="\
+hyperswap_1a_256.onnx|https://github.com/facefusion/facefusion-assets/releases/download/models-3.3.0/hyperswap_1a_256.onnx
+ghost_2_256.onnx|https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/ghost_2_256.onnx
+crossface_ghost.onnx|https://github.com/facefusion/facefusion-assets/releases/download/models-3.4.0/crossface_ghost.onnx"
+echo "$hires_models" | while IFS='|' read -r name url; do
+  [ -z "$name" ] && continue
+  if [ ! -f "$MODELS_DIR/$name" ]; then
+    echo "[3/4] Downloading $name..."
+    wget -q --show-progress -O "$MODELS_DIR/$name" "$url" || { echo "  (failed, skipping $name)"; rm -f "$MODELS_DIR/$name"; }
+  fi
+done
 echo "[3/4] All models ready."
 
 # --- [4/4] Start inference server ---

@@ -21,6 +21,32 @@ if torch.cuda.is_available():
 log = logging.getLogger('chimera.engine')
 
 
+# Higher-resolution one-shot swappers (FaceFusion ecosystem). 256px aligned crops →
+# crisp swap without a heavy restorer. Specs lifted from FaceFusion's face_swapper.
+WARP_TEMPLATES = {
+    'arcface_112_v1': np.array([[0.35473214, 0.45658929], [0.64526786, 0.45658929],
+                                [0.50000000, 0.61154464], [0.37913393, 0.77687500],
+                                [0.62086607, 0.77687500]], dtype=np.float32),
+    'arcface_128': np.array([[0.36167656, 0.40387734], [0.63696719, 0.40235469],
+                             [0.50019687, 0.56044219], [0.38710391, 0.72160547],
+                             [0.61507734, 0.72034453]], dtype=np.float32),
+}
+
+HIRES_SPECS = {
+    # key -> model filename + alignment template + input/output normalization
+    'hyperswap': {
+        'file': 'hyperswap_1a_256.onnx', 'template': 'arcface_128', 'size': 256,
+        'mean': np.array([0.5, 0.5, 0.5], np.float32), 'std': np.array([0.5, 0.5, 0.5], np.float32),
+        'embed': 'normed',          # uses the L2-normalized arcface embedding directly
+    },
+    'ghost': {
+        'file': 'ghost_2_256.onnx', 'template': 'arcface_112_v1', 'size': 256,
+        'mean': np.array([0.5, 0.5, 0.5], np.float32), 'std': np.array([0.5, 0.5, 0.5], np.float32),
+        'embed': 'crossface',       # raw embedding -> crossface_ghost.onnx -> normalize
+    },
+}
+
+
 # ---------------------------------------------------------------------------
 # Swap Engine — inswapper_128 via insightface
 # ---------------------------------------------------------------------------
@@ -131,6 +157,92 @@ class SwapEngine:
         self._source_vertical_stat_map_cache = {}
         self._blend_asset_cache = {}
         self._profile_counter = 0
+
+        # Higher-res swappers (hyperswap/ghost) — loaded if their model files exist.
+        self.swapper_type = 'inswapper'
+        self._source_embedding = None    # source latent for the active hi-res swapper
+        self._hires = {}
+        self._load_hires_swappers(_gpu_providers)
+
+    def _load_hires_swappers(self, providers):
+        """Load hyperswap/ghost (+ ghost's crossface embedding converter) if present."""
+        import onnxruntime as ort
+        for key, spec in HIRES_SPECS.items():
+            path = os.path.join('models', spec['file'])
+            if not os.path.exists(path):
+                log.info('Hi-res swapper %s not present (%s) — skipping', key, path)
+                continue
+            try:
+                sess = ort.InferenceSession(path, providers=providers)
+                ins = sess.get_inputs()
+                img_in = next(i.name for i in ins if len(i.shape) == 4)   # NCHW image
+                emb_in = next(i.name for i in ins if len(i.shape) == 2)   # (1, 512) embedding
+                self._hires[key] = {'session': sess, 'spec': spec, 'img_in': img_in, 'emb_in': emb_in}
+                log.info('Loaded hi-res swapper %s (img=%s emb=%s providers=%s)',
+                         key, img_in, emb_in, sess.get_providers())
+            except Exception as e:
+                log.warning('Failed to load hi-res swapper %s: %s', key, e)
+        # ghost needs the crossface embedding converter
+        if 'ghost' in self._hires:
+            cpath = os.path.join('models', 'crossface_ghost.onnx')
+            try:
+                sess = ort.InferenceSession(cpath, providers=providers)
+                self._hires['crossface'] = {'session': sess, 'in': sess.get_inputs()[0].name}
+                log.info('Loaded crossface_ghost converter')
+            except Exception as e:
+                log.warning('crossface_ghost missing/failed (%s) — dropping ghost', e)
+                self._hires.pop('ghost', None)
+
+    def available_swappers(self):
+        return ['inswapper'] + [k for k in self._hires if k != 'crossface']
+
+    def set_swapper(self, swapper_type):
+        swapper_type = (swapper_type or '').strip().lower()
+        if swapper_type != 'inswapper' and swapper_type not in self._hires:
+            raise ValueError(f'Swapper unavailable: {swapper_type} (have: {self.available_swappers()})')
+        self.swapper_type = swapper_type
+        self._compute_source_embedding()
+        self._blend_asset_cache.clear()
+        log.info('Swapper set: %s', swapper_type)
+        return swapper_type
+
+    def _compute_source_embedding(self):
+        """Prepare the source latent for the active hi-res swapper (no-op for inswapper)."""
+        self._source_embedding = None
+        if self._source_face is None or self.swapper_type == 'inswapper':
+            return
+        spec = HIRES_SPECS.get(self.swapper_type)
+        if spec is None:
+            return
+        if spec['embed'] == 'normed':
+            emb = np.asarray(self._source_face.normed_embedding, np.float32).reshape(1, -1)
+        else:  # crossface (ghost)
+            emb = np.asarray(self._source_face.embedding, np.float32).reshape(-1, 512)
+            conv = self._hires.get('crossface')
+            if conv is not None:
+                emb = conv['session'].run(None, {conv['in']: emb})[0]
+            emb = emb.reshape(1, -1)
+            emb = emb / (np.linalg.norm(emb) + 1e-8)
+        self._source_embedding = emb.astype(np.float32)
+
+    def _run_hires_swap(self, roi, face):
+        """Align→run→denormalize for hyperswap/ghost. Returns (swapped_256, affine) with
+        the same contract as inswapper.get(): affine maps roi→aligned (inverse pastes back)."""
+        entry = self._hires[self.swapper_type]
+        spec = entry['spec']
+        size = spec['size']
+        template = WARP_TEMPLATES[spec['template']] * size
+        kps = np.asarray(face.kps, dtype=np.float32)
+        M = cv2.estimateAffinePartial2D(kps, template, method=cv2.RANSAC, ransacReprojThreshold=100)[0]
+        aligned = cv2.warpAffine(roi, M, (size, size), borderMode=cv2.BORDER_REPLICATE, flags=cv2.INTER_AREA)
+        blob = aligned[:, :, ::-1].astype(np.float32) / 255.0
+        blob = (blob - spec['mean']) / spec['std']
+        blob = np.ascontiguousarray(blob.transpose(2, 0, 1)[np.newaxis])
+        out = entry['session'].run(None, {entry['img_in']: blob, entry['emb_in']: self._source_embedding})[0]
+        out = out[0].transpose(1, 2, 0)
+        out = out * spec['std'] + spec['mean']
+        out = np.clip(out, 0.0, 1.0)[:, :, ::-1] * 255.0
+        return out.astype(np.uint8), M.astype(np.float32)
 
     def _log_app_model_providers(self, label, app):
         app_model_providers = {}
@@ -330,7 +442,10 @@ class SwapEngine:
         blend_assets = self._get_blend_assets(local_face, roi_h, roi_w)
 
         swap_t0 = time.perf_counter()
-        swapped_face, affine = self.swapper.get(roi, local_face, self._source_face, paste_back=False)
+        if self.swapper_type != 'inswapper' and self.swapper_type in self._hires and self._source_embedding is not None:
+            swapped_face, affine = self._run_hires_swap(roi, local_face)
+        else:
+            swapped_face, affine = self.swapper.get(roi, local_face, self._source_face, paste_back=False)
         inverse_affine = cv2.invertAffineTransform(np.asarray(affine, dtype=np.float32))
         swapped_roi = cv2.warpAffine(
             swapped_face,
@@ -731,6 +846,7 @@ class SwapEngine:
             self._source_face.bbox,
             fallback_stats=[self._source_skin_stats, self._source_skin_stats, self._source_skin_stats] if self._source_skin_stats is not None else None,
         )
+        self._compute_source_embedding()   # prepare latent for the active hi-res swapper
         log.info('Identity face set (embedding shape: %s)', self._source_face.embedding.shape)
 
     def swap_frame(self, frame: np.ndarray) -> np.ndarray:

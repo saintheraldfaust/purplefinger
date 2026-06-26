@@ -103,6 +103,9 @@ class FaceSwapPipeline:
             self.enhance.ENHANCE_EVERY_N = STREAM_PROFILES[profile]['enhance_every_n']
         log.info('Stream profile set: %s', profile)
 
+    def set_swapper(self, swapper_type):
+        return self.swap.set_swapper(swapper_type)
+
     def get_runtime_settings(self):
         return STREAM_PROFILES[self.profile].copy()
 
@@ -145,6 +148,8 @@ class FaceSwapPipeline:
     def get_stats(self):
         return {
             'profile': self.profile,
+            'swapper': getattr(self.swap, 'swapper_type', 'inswapper'),
+            'available_swappers': self.swap.available_swappers(),
             'swap_ms': round(self._ema_swap, 1) if self._ema_swap is not None else None,
             'enhance_ms': round(self._ema_enhance, 1) if self._ema_enhance is not None else None,
         }

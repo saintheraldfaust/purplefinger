@@ -228,6 +228,22 @@ async def handle_set_mode(request):
     return web.json_response({'ok': True, 'profile': pipeline.profile})
 
 
+# --- Swapper model selection (inswapper / hyperswap / ghost) ---
+async def handle_set_swapper(request):
+    if pipeline is None:
+        return web.json_response({'error': 'Pipeline not initialised'}, status=503)
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({'error': 'Invalid JSON'}, status=400)
+    name = data.get('swapper')
+    try:
+        applied = pipeline.set_swapper(name)
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+    return web.json_response({'ok': True, 'swapper': applied})
+
+
 # --- Stats (rolling timings, so tuning doesn't require log scraping) ---
 async def handle_stats(request):
     if pipeline is None:
@@ -258,6 +274,7 @@ def build_app():
     cors.add(app.router.add_post('/set-mode', handle_set_mode))
     cors.add(app.router.add_get('/health', handle_health))
     cors.add(app.router.add_get('/stats', handle_stats))
+    cors.add(app.router.add_post('/set-swapper', handle_set_swapper))
 
     return app
 
