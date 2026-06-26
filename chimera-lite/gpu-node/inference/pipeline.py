@@ -74,6 +74,10 @@ class FaceSwapPipeline:
             log.warning('EnhanceEngine failed to load (%s) — running without enhancement', e)
             self.enhance = None
 
+        # Default profile: high quality (GFPGAN every frame). Go through set_profile so
+        # the enhance cadence + detect cadence + tracking config are actually applied.
+        self.set_profile('hq')
+
     @property
     def ready(self) -> bool:
         return self.swap._source_face is not None
