@@ -1,0 +1,2340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src *; media-src * blob:; img-src 'self' blob: data:" />
+  <title>Project Purplefinger</title>
+  <style>
+    /* Pixel/gamified accent face — used ONLY on the wordmark + boot loader.
+       Falls back to mono if the bundled file is absent. */
+    @font-face {
+      font-family: 'PurplePixel';
+      src: url('fonts/pixel.ttf') format('truetype');
+      font-display: swap;
+    }
+
+    :root {
+      /* ---- Purplefinger design system — black + glass, strict greyscale ---- */
+      /* surfaces */
+      --bg-0: #000000;
+      --bg-1: #050505;
+      --bg-raise: #0a0a0b;
+      /* glass fills (translucent white over black) */
+      --glass-1: rgba(255, 255, 255, 0.03);
+      --glass-2: rgba(255, 255, 255, 0.06);
+      --glass-3: rgba(255, 255, 255, 0.10);
+      /* hairlines */
+      --line-1: rgba(255, 255, 255, 0.08);
+      --line-2: rgba(255, 255, 255, 0.16);
+      /* greyscale text ramp */
+      --text-0: #f5f5f5;
+      --text-1: #b4b4b4;
+      --text-2: #777777;
+      --text-3: #4d4d4d;
+      /* the only accent is white, used sparingly */
+      --accent: #ffffff;
+      --accent-soft: rgba(255, 255, 255, 0.14);
+      /* status encoded by brightness + motion, never hue */
+      --on: #ffffff;
+      --warn: #9a9a9a;
+      --err: #e5e5e5;
+      /* geometry */
+      --radius: 10px;
+      --radius-sm: 6px;
+      --radius-lg: 14px;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+      /* type */
+      --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+      --font-pixel: 'PurplePixel', var(--font-mono);
+
+      /* ---- legacy tokens remapped to greyscale so existing rules go B&W ---- */
+      --blue: #ffffff;
+      --blue-2: #cfcfcf;
+      --bg: #000000;
+      --bg-2: #050505;
+      --bg-3: #0a0a0b;
+      --panel: var(--glass-1);
+      --panel-2: var(--glass-2);
+      --border: var(--line-1);
+      --text: var(--text-1);
+      --muted: var(--text-2);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg-0);
+      color: var(--text-1);
+      font-family: var(--font-ui);
+      overflow: hidden;
+    }
+
+    /* Frosted-glass material. The inset top highlight reads as a bevelled
+       frost edge over true black — the detail that makes it look engineered. */
+    .glass {
+      background: var(--glass-1);
+      border: 1px solid var(--line-1);
+      border-radius: var(--radius-lg);
+      backdrop-filter: blur(20px) saturate(120%);
+      -webkit-backdrop-filter: blur(20px) saturate(120%);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), var(--shadow);
+    }
+    .glass-strong {
+      background: rgba(10, 10, 11, 0.72);
+      border: 1px solid var(--line-2);
+      backdrop-filter: blur(32px) saturate(120%);
+      -webkit-backdrop-filter: blur(32px) saturate(120%);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 40px 120px rgba(0, 0, 0, 0.8);
+    }
+    /* mono utility for data/labels/stats */
+    .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 100vh;
+    }
+
+    #header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 24px;
+      background: rgba(5,5,5, 0.82);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(14px);
+    }
+
+    #branding { display: flex; flex-direction: column; gap: 6px; }
+    #branding-title {
+      font-family: var(--font-pixel);
+      font-size: 1.05rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-0);
+      line-height: 1;
+    }
+    #branding-sub {
+      font-family: var(--font-mono);
+      font-size: 0.62rem;
+      color: var(--text-2);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    #header-right { display: flex; align-items: center; gap: 12px; }
+
+    #current-pod {
+      font-size: 0.76rem;
+      padding: 5px 12px;
+      border-radius: 999px;
+      background: rgba(10,10,11,0.95);
+      color: #f5f5f5;
+      border: 1px solid var(--border);
+      white-space: nowrap;
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #status-badge {
+      font-size: 0.78rem;
+      padding: 5px 14px;
+      border-radius: 999px;
+      background: rgba(10,10,11,0.95);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    #status-badge.active { background: rgba(20,20,22, 0.35); color: #f5f5f5; border-color: rgba(255,255,255,0.35); }
+    #status-badge.loading { background: rgba(255,255,255, 0.30); color: #cfcfcf; border-color: rgba(255,255,255, 0.35); }
+    #status-badge.error { background: rgba(255,255,255, 0.32); color: #e5e5e5; border-color: rgba(255,255,255,0.35); }
+
+    .ghost-btn,
+    .primary-btn,
+    .danger-btn {
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 0.86rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.12s ease, opacity 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+    }
+    .ghost-btn:hover,
+    .primary-btn:hover,
+    .danger-btn:hover { transform: translateY(-1px); }
+    .ghost-btn:disabled,
+    .primary-btn:disabled,
+    .danger-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+    .ghost-btn {
+      background: rgba(10,10,11,0.9);
+      color: var(--text);
+      border-color: var(--border);
+    }
+    .ghost-btn:hover:not(:disabled) { background: rgba(255,255,255,0.18); }
+
+    .primary-btn {
+      background: linear-gradient(135deg, var(--blue) 0%, #9a9a9a 100%);
+      color: white;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+    }
+
+    .danger-btn {
+      background: linear-gradient(135deg, #777777 0%, #9a9a9a 100%);
+      color: white;
+      display: none;
+    }
+
+    #body {
+      display: grid;
+      grid-template-columns: 330px 1fr;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    #sidebar {
+      padding: 20px;
+      border-right: 1px solid var(--border);
+      background: rgba(5,5,5, 0.70);
+      backdrop-filter: blur(18px);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--glass-1);
+      border: 1px solid var(--line-1);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      backdrop-filter: blur(20px) saturate(120%);
+      -webkit-backdrop-filter: blur(20px) saturate(120%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .panel-title {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      color: var(--text-2);
+      font-weight: 600;
+    }
+
+    .panel-copy {
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    #face-preview {
+      width: 84px;
+      height: 84px;
+      border-radius: 18px;
+      object-fit: cover;
+      border: 1px solid rgba(255,255,255,0.28);
+      box-shadow: 0 10px 26px rgba(0,0,0,0.45);
+      display: none;
+    }
+
+    .face-row { display: flex; align-items: center; gap: 14px; }
+    .face-meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .face-meta strong { font-size: 0.9rem; color: var(--text); }
+
+    .action-stack { display: grid; gap: 10px; }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .segmented-btn {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(10,10,11,0.72);
+      color: var(--muted);
+      padding: 10px 12px;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, transform 0.12s ease;
+    }
+
+    .segmented-btn:hover { transform: translateY(-1px); }
+    .segmented-btn.active {
+      background: rgba(255,255,255,0.18);
+      border-color: rgba(255,255,255,0.42);
+      color: var(--text);
+    }
+
+    .segmented-btn strong {
+      display: block;
+      font-size: 0.82rem;
+      margin-bottom: 4px;
+    }
+
+    .segmented-btn span {
+      display: block;
+      font-size: 0.72rem;
+      line-height: 1.35;
+    }
+
+    .ctrl-row {
+      display: grid;
+      grid-template-columns: 78px 1fr 44px;
+      gap: 10px;
+      align-items: center;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .ctrl-row .val {
+      text-align: right;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 5px;
+      border-radius: 999px;
+      background: rgba(20,20,22,0.95);
+      outline: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #b4b4b4 0%, #b4b4b4 100%);
+      box-shadow: none;
+      cursor: pointer;
+    }
+
+    .text-input {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(10,10,11,0.72);
+      color: var(--text);
+      padding: 11px 12px;
+      font-size: 0.84rem;
+      outline: none;
+    }
+
+    .text-input:focus {
+      border-color: rgba(255,255,255,0.45);
+      box-shadow: none;
+    }
+
+    .field-stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .field-label {
+      display: grid;
+      gap: 6px;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    /* --- Notification Bell Icon + Badge --- */
+    .nav-icon-btn {
+      position: relative;
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(10,10,11,0.95);
+      color: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.12s, transform 0.12s;
+      flex-shrink: 0;
+    }
+    .nav-icon-btn:hover { background: rgba(255,255,255,0.22); transform: translateY(-1px); }
+    .nav-icon-btn svg { width: 20px; height: 20px; fill: currentColor; }
+    .nav-icon-btn.shield-active {
+      color: #b4b4b4;
+      border-color: rgba(255,255,255, 0.35);
+      background: rgba(20,20,22, 0.28);
+    }
+    .nav-icon-btn.shield-active:hover { background: rgba(20,20,22, 0.42); }
+
+    /* --- Privacy Shield inline label --- */
+    .shield-wrap {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .shield-label {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.25;
+      user-select: none;
+    }
+    .shield-label-name {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: #b4b4b4;
+      letter-spacing: 0.03em;
+    }
+    .shield-label-desc {
+      font-size: 0.64rem;
+      color: #777777;
+      max-width: 160px;
+    }
+    #shield-tooltip-status {
+      font-size: 0.65rem;
+      font-weight: 700;
+      color: #b4b4b4;
+      letter-spacing: 0.04em;
+    }
+    #shield-tooltip-status.off { color: #cfcfcf; }
+
+
+    #config-note {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    #stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .stat-box {
+      background: var(--bg-1);
+      border: 1px solid var(--line-1);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .stat-label {
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--text-2);
+    }
+
+    .stat-val {
+      font-family: var(--font-mono);
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text-0);
+      font-variant-numeric: tabular-nums;
+    }
+
+    #main {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      padding: 20px;
+      display: flex;
+      align-items: stretch;
+      justify-content: stretch;
+    }
+
+    #video-shell {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      border-radius: 24px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(5,5,5,0.96) 0%, rgba(5,5,5, 0.98) 100%);
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #remote-canvas {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      image-rendering: auto;
+      background: #050505;
+    }
+
+    #video-empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      color: var(--muted);
+      text-align: center;
+      padding: 24px;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+
+    #video-empty strong {
+      color: #e5e5e5;
+      font-size: 1rem;
+      letter-spacing: 0.03em;
+    }
+
+    /* Idle state icon (monitor) */
+    .empty-icon {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.18);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 4px;
+    }
+    .empty-icon svg { width: 28px; height: 28px; fill: #b4b4b4; opacity: 0.7; }
+
+    /* Circular session loader — shown when provisioning */
+    #session-loader {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+    }
+    #session-loader.visible { display: flex; }
+
+    .session-spinner {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.12);
+      border-top-color: #b4b4b4;
+      border-right-color: #b4b4b4;
+      animation: session-spin 1s linear infinite;
+      box-shadow: none;
+    }
+
+    @keyframes session-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .session-loader-text {
+      font-size: 0.88rem;
+      color: #f5f5f5;
+      letter-spacing: 0.04em;
+      font-weight: 600;
+    }
+
+    .session-loader-sub {
+      font-size: 0.76rem;
+      color: var(--muted);
+      max-width: 340px;
+      line-height: 1.45;
+    }
+
+    .session-loader-elapsed {
+      font-size: 0.72rem;
+      color: #cfcfcf;
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+    }
+
+    /* Camera PiP placeholder */
+    #cam-placeholder {
+      position: absolute;
+      right: 18px;
+      bottom: 18px;
+      width: 220px;
+      aspect-ratio: 16 / 9;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: linear-gradient(135deg, rgba(10,10,11,0.92) 0%, rgba(10,10,11,0.88) 100%);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+    #cam-placeholder svg {
+      width: 32px;
+      height: 32px;
+      fill: #4d4d4d;
+      opacity: 0.7;
+    }
+    #cam-placeholder span {
+      font-size: 0.68rem;
+      color: #4d4d4d;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+
+    /* Local camera PiP — hidden by default, shown via JS .active class when stream starts */
+    #local-video { opacity: 0; transition: opacity 0.3s ease; }
+    #local-video.active { opacity: 1; }
+
+    #idle-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+
+    #local-video {
+      position: absolute;
+      right: 18px;
+      bottom: 18px;
+      width: 220px;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.24);
+      background: #050505;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+    }
+
+    #overlay {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      min-width: 156px;
+      padding: 5px 0;
+      background: rgba(10,10,11,0.6);
+      border: 1px solid var(--line-1);
+      border-radius: var(--radius);
+      backdrop-filter: blur(20px) saturate(120%);
+      -webkit-backdrop-filter: blur(20px) saturate(120%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+      pointer-events: none;
+    }
+
+    .hud-pill {
+      background: none;
+      border: none;
+      backdrop-filter: none;
+      border-radius: 0;
+      padding: 6px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-2);
+    }
+    .hud-pill span { color: var(--text-0); font-variant-numeric: tabular-nums; letter-spacing: 0; }
+
+    /* Connectivity score — top-right of video area */
+    #conn-score-pill {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      background: rgba(5,5,5,0.78);
+      border: 1px solid rgba(255,255,255,0.16);
+      backdrop-filter: blur(10px);
+      color: #f5f5f5;
+      border-radius: 999px;
+      padding: 6px 14px 6px 8px;
+      font-size: 0.76rem;
+      font-weight: 700;
+      pointer-events: none;
+      z-index: 3;
+    }
+    #conn-score-pill.visible { display: flex; }
+
+    .score-ring {
+      width: 30px; height: 30px;
+      position: relative;
+    }
+    .score-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+    .score-ring-bg { fill: none; stroke: rgba(255,255,255,0.18); stroke-width: 3; }
+    .score-ring-fg { fill: none; stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 0.6s ease, stroke 0.4s ease; }
+    .score-ring-label {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.58rem; font-weight: 800; color: #f5f5f5;
+    }
+
+    .conn-title {
+      font-size: 0.58rem;
+      font-weight: 600;
+      color: #777777;
+      letter-spacing: 0.02em;
+      margin-bottom: 1px;
+    }
+    .conn-grade { font-weight: 800; font-size: 0.82rem; }
+    .conn-grade.excellent { color: #b4b4b4; }
+    .conn-grade.good      { color: #b4b4b4; }
+    .conn-grade.fair      { color: #cfcfcf; }
+    .conn-grade.poor      { color: #cfcfcf; }
+
+    .conn-hint {
+      font-size: 0.64rem;
+      font-weight: 500;
+      color: #777777;
+      max-width: 120px;
+      line-height: 1.2;
+    }
+
+    /* Reconnect banner */
+    #reconnect-banner {
+      display: none;
+      position: absolute;
+      bottom: 80px;
+      left: 50%; transform: translateX(-50%);
+      background: rgba(10,10,11,0.82);
+      backdrop-filter: blur(28px) saturate(120%);
+      -webkit-backdrop-filter: blur(28px) saturate(120%);
+      border: 1px solid var(--line-2);
+      border-radius: var(--radius-lg);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 24px 70px rgba(0,0,0,0.7);
+      padding: 11px 14px 11px 18px;
+      z-index: 10;
+      align-items: center;
+      gap: 14px;
+      pointer-events: auto;
+      animation: banner-in 0.3s ease;
+    }
+    #reconnect-banner.visible { display: flex; }
+    @keyframes banner-in { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+    #reconnect-banner .banner-text {
+      color: var(--text-1); font-family: var(--font-ui); font-size: 0.78rem; font-weight: 500;
+    }
+    #btn-reconnect {
+      background: var(--glass-2); color: var(--text-1);
+      border: 1px solid var(--line-1); border-radius: var(--radius-sm);
+      padding: 7px 14px;
+      font-family: var(--font-ui); font-size: 0.74rem; font-weight: 500;
+      cursor: pointer; white-space: nowrap;
+      transition: background .15s, color .15s, border-color .15s;
+    }
+    #btn-reconnect:hover { background: var(--glass-3); color: var(--text-0); border-color: var(--line-2); }
+
+    /* Audio Level Meter — bottom-left of video area */
+    #audio-meter {
+      position: absolute;
+      bottom: 18px;
+      left: 18px;
+      display: none;
+      align-items: flex-end;
+      gap: 3px;
+      height: 40px;
+      padding: 6px 10px;
+      background: rgba(5,5,5,0.72);
+      border: 1px solid rgba(255,255,255,0.14);
+      backdrop-filter: blur(10px);
+      border-radius: 12px;
+      z-index: 3;
+      pointer-events: none;
+    }
+    #audio-meter.visible { display: flex; }
+    .meter-bar {
+      width: 4px;
+      min-height: 3px;
+      border-radius: 2px;
+      background: #b4b4b4;
+      transition: height 0.07s ease;
+    }
+    #audio-meter .meter-icon {
+      width: 14px; height: 14px;
+      fill: #777777;
+      margin-right: 4px;
+      align-self: center;
+    }
+
+    /* Privacy Shield — darkens video when network is poor */
+    #privacy-shield {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(5,5,5,0.92);
+      backdrop-filter: blur(16px);
+      z-index: 8;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      text-align: center;
+      padding: 40px;
+      animation: shield-in 0.4s ease;
+    }
+    #privacy-shield.visible { display: flex; }
+    @keyframes shield-in { from { opacity: 0; } to { opacity: 1; } }
+    .shield-icon {
+      width: 48px; height: 48px;
+      fill: #cfcfcf;
+      opacity: 0.9;
+      animation: shield-pulse 2s ease-in-out infinite;
+    }
+    @keyframes shield-pulse { 0%,100% { opacity: 0.7; transform: scale(1); } 50% { opacity: 1; transform: scale(1.08); } }
+    .shield-title {
+      font-size: 1rem; font-weight: 700; color: #f5f5f5;
+    }
+    .shield-sub {
+      font-size: 0.78rem; color: #777777; max-width: 300px; line-height: 1.5;
+    }
+    .shield-score {
+      font-size: 0.72rem; color: #777777; font-weight: 600;
+      margin-top: 4px;
+    }
+
+    /* Toggle switch */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 2px;
+    }
+    .toggle-row span {
+      font-size: 0.78rem;
+      color: #b4b4b4;
+    }
+    .toggle-switch {
+      position: relative;
+      width: 36px; height: 20px;
+      -webkit-app-region: no-drag;
+    }
+    .toggle-switch input {
+      opacity: 0; width: 0; height: 0;
+    }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: rgba(255,255,255, 0.35);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.25s;
+    }
+    .toggle-track::after {
+      content: '';
+      position: absolute;
+      top: 2px; left: 2px;
+      width: 16px; height: 16px;
+      background: #f5f5f5;
+      border-radius: 50%;
+      transition: transform 0.25s;
+    }
+    .toggle-switch input:checked + .toggle-track {
+      background: rgba(255,255,255, 0.6);
+    }
+    .toggle-switch input:checked + .toggle-track::after {
+      transform: translateX(16px);
+    }
+
+    #footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 20px;
+      border-top: 1px solid var(--border);
+      background: rgba(5,5,5, 0.86);
+      backdrop-filter: blur(12px);
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    #log { min-height: 1.2em; color: #b4b4b4; }
+    #obs-hint span { color: #cfcfcf; }
+    input[type="file"] { display: none; }
+
+    /* --- Tutorial Overlay --- */
+    #tutorial-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      display: none;
+      align-items: start;
+      justify-content: center;
+      background: rgba(5,5,5,0.96);
+      backdrop-filter: blur(18px);
+      overflow-y: auto;
+      padding: 30px 20px 60px;
+    }
+    #tutorial-overlay.visible { display: flex; }
+
+    #tutorial-card {
+      width: min(860px, 100%);
+      border-radius: 24px;
+      border: 1px solid rgba(255,255,255,0.22);
+      background: rgba(10,10,11,0.92);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+    }
+
+    #tutorial-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.14);
+      background: rgba(10,10,11,0.78);
+    }
+
+    #tutorial-topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #tutorial-title {
+      font-size: 0.82rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #f5f5f5;
+      font-weight: 800;
+    }
+
+    #btn-close-tutorial {
+      background: rgba(255,255,255,0.18);
+      border: 1px solid rgba(255,255,255,0.35);
+      color: #e5e5e5;
+      border-radius: 10px;
+      padding: 6px 16px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    #btn-close-tutorial:hover { background: rgba(255,255,255,0.32); }
+
+    #tutorial-body {
+      padding: 28px 30px 36px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+      color: #b4b4b4;
+      font-size: 0.88rem;
+      line-height: 1.7;
+    }
+
+    .tut-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .tut-section h2 {
+      font-size: 1.05rem;
+      color: #f5f5f5;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+
+    .tut-section h3 {
+      font-size: 0.92rem;
+      color: #b4b4b4;
+      font-weight: 700;
+      margin-top: 6px;
+    }
+
+    .tut-section ol, .tut-section ul {
+      padding-left: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .tut-section code {
+      background: rgba(20,20,22,0.8);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 0.84rem;
+      color: #cfcfcf;
+      font-family: Consolas, 'Courier New', monospace;
+    }
+
+    .tut-step-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--blue) 0%, #9a9a9a 100%);
+      color: white;
+      font-size: 0.74rem;
+      font-weight: 800;
+      flex-shrink: 0;
+      margin-right: 8px;
+    }
+
+    .tut-numbered-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 2px;
+    }
+
+    .tut-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(10,10,11,0.9);
+      color: var(--text);
+      padding: 10px 16px;
+      font-size: 0.84rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.12s, transform 0.12s;
+      width: fit-content;
+    }
+    .tut-btn:hover { background: rgba(255,255,255,0.18); transform: translateY(-1px); }
+
+    .tut-highlight {
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.22);
+      border-radius: 14px;
+      padding: 16px 18px;
+    }
+
+    .tut-divider {
+      height: 1px;
+      background: rgba(255,255,255,0.12);
+    }
+
+    .tut-footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.78rem;
+      padding-top: 10px;
+    }
+
+    .tut-footer a {
+      color: #b4b4b4;
+      text-decoration: none;
+    }
+    .tut-footer a:hover { text-decoration: underline; }
+
+    #launch-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000000;
+      transition: opacity 0.55s ease, visibility 0.55s ease;
+    }
+
+    #launch-overlay.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    #launch-card {
+      width: min(1180px, calc(100vw - 40px));
+      border-radius: 24px;
+      border: 1px solid rgba(255,255,255,0.22);
+      background: rgba(5,5,5,0.78);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+    }
+
+    #launch-topbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 18px;
+      border-bottom: 1px solid rgba(255,255,255,0.14);
+      background: rgba(10,10,11,0.78);
+    }
+
+    .launch-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.32);
+    }
+
+    .launch-dot:nth-child(1) { background: #b4b4b4; }
+    .launch-dot:nth-child(2) { background: #b4b4b4; }
+    .launch-dot:nth-child(3) { background: #f5f5f5; }
+
+    #launch-title {
+      margin-left: 6px;
+      font-size: 0.76rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #f5f5f5;
+    }
+
+    #launch-body {
+      padding: 28px 30px 32px;
+      display: grid;
+      gap: 18px;
+    }
+
+    #launch-spinner-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      color: #e5e5e5;
+    }
+
+    #launch-spinner {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 3px solid rgba(255,255,255, 0.18);
+      border-top-color: #b4b4b4;
+      border-right-color: #b4b4b4;
+      animation: launch-spin 0.9s linear infinite;
+      box-shadow: none;
+    }
+
+    #launch-status {
+      font-size: 0.88rem;
+      color: #b4b4b4;
+      letter-spacing: 0.04em;
+    }
+
+    #launch-terminal {
+      min-height: 430px;
+      border-radius: 18px;
+      padding: 26px 28px;
+      background: linear-gradient(180deg, rgba(5,5,5, 0.95) 0%, rgba(5,5,5,0.98) 100%);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: #f5f5f5;
+      font-family: Consolas, 'Courier New', monospace;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    #launch-ascii {
+      margin: 0;
+      min-height: 320px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      white-space: pre;
+      overflow: hidden;
+      width: 100%;
+      font-size: clamp(10px, 1.12vw, 18px);
+      line-height: 1.02;
+      letter-spacing: 0.01em;
+      text-align: center;
+      color: #f5f5f5;
+      text-shadow: 0 0 18px rgba(255,255,255,0.22);
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+      transition: opacity 0.35s ease, transform 0.35s ease;
+    }
+
+    #launch-ascii.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    #launch-loader {
+      min-height: 1.6em;
+      color: #b4b4b4;
+      font-size: 0.88rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .launch-subtext {
+      font-size: 0.76rem;
+      color: #777777;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    @keyframes launch-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* ── Light Quality Gate Overlay ── */
+    #light-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(20,20,22, 0.93);
+      backdrop-filter: blur(18px);
+      z-index: 9;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      text-align: center;
+      padding: 40px;
+      animation: shield-in 0.35s ease;
+    }
+    #light-overlay.visible { display: flex; }
+
+    .light-gate-icon {
+      width: 52px; height: 52px;
+      fill: #cfcfcf;
+      opacity: 0.92;
+      animation: light-pulse 2.2s ease-in-out infinite;
+    }
+    @keyframes light-pulse {
+      0%, 100% { opacity: 0.68; transform: scale(1); }
+      50%       { opacity: 1;    transform: scale(1.1); }
+    }
+    .light-overlay-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #f5f5f5;
+      letter-spacing: 0.01em;
+    }
+    .light-overlay-issue {
+      font-size: 0.84rem;
+      color: #e5e5e5;
+      max-width: 330px;
+      line-height: 1.55;
+      font-weight: 600;
+    }
+    .light-overlay-sub {
+      font-size: 0.74rem;
+      color: #4d4d4d;
+      max-width: 310px;
+      line-height: 1.4;
+    }
+    .light-overlay-score {
+      font-size: 0.68rem;
+      color: #777777;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+
+    /* ── Light Quality pill (in top-left overlay) ── */
+    #light-pill { display: none; gap: 5px; align-items: center; }
+    #light-pill-score { font-variant-numeric: tabular-nums; transition: color 0.4s ease; }
+
+
+    /* ═══════════════════════════════════════════════════════════════
+       RECORD SESSION
+    ═══════════════════════════════════════════════════════════════ */
+    .btn-record {
+      display: flex; align-items: center; gap: 7px;
+      padding: 7px 15px;
+      border-radius: 9px;
+      border: 1px solid rgba(255,255,255,0.35);
+      background: rgba(255,255,255,0.10);
+      color: #e5e5e5;
+      font-size: 0.76rem;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      flex-shrink: 0;
+    }
+    .btn-record:hover {
+      background: rgba(255,255,255,0.22);
+      border-color: rgba(255,255,255,0.6);
+      color: #e5e5e5;
+    }
+    .btn-record.recording {
+      background: rgba(255,255,255,0.30);
+      border-color: rgba(255,255,255,0.8);
+      color: #fff;
+      animation: recPulse 1.2s infinite;
+    }
+    .btn-record svg { width: 15px; height: 15px; fill: currentColor; flex-shrink: 0; }
+    @keyframes recPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0.4); }
+      50%      { box-shadow: none; }
+    }
+
+    /* Record timer badge */
+    .rec-timer {
+      display: none; align-items: center; gap: 4px;
+      padding: 4px 10px; border-radius: 6px;
+      background: rgba(255,255,255,0.15); color: #cfcfcf;
+      font-size: 0.66rem; font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .rec-timer.visible { display: inline-flex; }
+    .rec-timer .rec-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #9a9a9a;
+      animation: recDotBlink 1s infinite;
+    }
+    @keyframes recDotBlink {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.25; }
+    }
+
+    /* Audio device selector dropdown */
+    .rec-audio-select-wrap {
+      position: relative;
+      display: block;
+    }
+    .rec-audio-select-wrap.visible { display: block; }
+    .rec-audio-select {
+      appearance: none;
+      padding: 5px 24px 5px 8px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: rgba(10,10,11,0.9);
+      color: #f5f5f5;
+      font-size: 0.68rem;
+      font-family: inherit;
+      cursor: pointer;
+      max-width: 170px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .rec-audio-select:focus { outline: none; border-color: rgba(255,255,255,0.5); }
+
+    /* ── Recording save bar (top strip) ── */
+    .rec-save-bar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
+      display: none; align-items: center; gap: 12px;
+      padding: 10px 20px;
+      background: rgba(10,10,11,0.97);
+      border-bottom: 1px solid rgba(255,255,255,0.3);
+      backdrop-filter: blur(6px);
+      box-shadow: 0 2px 16px rgba(0,0,0,0.4);
+      transform: translateY(-100%);
+      transition: transform 0.3s ease;
+    }
+    .rec-save-bar.visible { display: flex; transform: translateY(0); }
+    .rec-save-bar.done { border-bottom-color: rgba(255,255,255,0.5); }
+    .rec-save-spinner {
+      width: 22px; height: 22px; flex-shrink: 0;
+      border: 3px solid rgba(255,255,255,0.15);
+      border-top-color: #9a9a9a;
+      border-radius: 50%;
+      animation: recSpin 0.7s linear infinite;
+    }
+    .rec-save-bar.done .rec-save-spinner { display: none; }
+    @keyframes recSpin { to { transform: rotate(360deg); } }
+    .rec-save-check {
+      display: none; width: 22px; height: 22px; flex-shrink: 0;
+      fill: #cfcfcf;
+    }
+    .rec-save-bar.done .rec-save-check { display: block; }
+    .rec-save-label {
+      font-size: 0.78rem; font-weight: 700; color: #cfcfcf;
+      white-space: nowrap;
+    }
+    .rec-save-bar.done .rec-save-label { color: #f5f5f5; }
+    .rec-save-sub {
+      font-size: 0.66rem; color: var(--muted); flex: 1;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .rec-save-progress {
+      flex: 1; max-width: 200px; height: 4px;
+      background: rgba(255,255,255,0.2); border-radius: 2px; overflow: hidden;
+    }
+    .rec-save-bar.done .rec-save-progress { display: none; }
+    .rec-save-progress-fill {
+      height: 100%; width: 0; border-radius: 2px;
+      background: linear-gradient(90deg, #9a9a9a, #9a9a9a);
+      transition: width 0.3s ease;
+    }
+    .rec-save-open-btn {
+      display: none; padding: 5px 14px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.4); background: rgba(255,255,255,0.12);
+      color: #cfcfcf; font-size: 0.68rem; font-weight: 700;
+      cursor: pointer; white-space: nowrap; transition: all 0.15s;
+    }
+    .rec-save-open-btn:hover {
+      background: rgba(255,255,255,0.25); border-color: rgba(255,255,255,0.7);
+    }
+    .rec-save-bar.done .rec-save-open-btn { display: inline-flex; }
+    .rec-save-dismiss {
+      padding: 4px 10px; border-radius: 5px;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--muted); font-size: 0.64rem; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .rec-save-dismiss:hover { border-color: rgba(255,255,255,0.4); color: #e5e5e5; }
+
+    /* ═══════════════════════════════════════════════════════════════
+       INSTRUCTIONS TOUR
+    ═══════════════════════════════════════════════════════════════ */
+
+    /* Header button */
+    .btn-instructions {
+      display: flex; align-items: center; gap: 7px;
+      padding: 7px 15px;
+      border-radius: 9px;
+      border: 1px solid rgba(255,255,255,0.35);
+      background: rgba(255,255,255, 0.10);
+      color: #b4b4b4;
+      font-size: 0.76rem;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      flex-shrink: 0;
+    }
+    .btn-instructions:hover {
+      background: rgba(255,255,255, 0.22);
+      border-color: rgba(255,255,255,0.6);
+      color: #cfcfcf;
+    }
+    .btn-instructions svg { width: 15px; height: 15px; fill: currentColor; flex-shrink: 0; }
+
+    /* Backdrop — full-screen click-blocker behind the spotlight */
+    #tour-backdrop {
+      display: none;
+      position: fixed; inset: 0;
+      z-index: 18900;
+      cursor: default;
+    }
+    #tour-backdrop.active { display: block; }
+
+    /* Spotlight — transparent box that creates a dark surround via box-shadow */
+    #tour-spotlight {
+      position: fixed;
+      z-index: 18950;
+      pointer-events: none;
+      border-radius: 10px;
+      box-shadow: 0 0 0 9999px rgba(5,5,5, 0.80);
+      outline: 2px solid rgba(255,255,255,0.55);
+      outline-offset: 2px;
+      opacity: 0;
+      transition:
+        top    0.30s cubic-bezier(.4,0,.2,1),
+        left   0.30s cubic-bezier(.4,0,.2,1),
+        width  0.30s cubic-bezier(.4,0,.2,1),
+        height 0.30s cubic-bezier(.4,0,.2,1),
+        opacity 0.20s ease;
+    }
+
+    /* Tour card */
+    #tour-card {
+      display: none;
+      position: fixed;
+      z-index: 19000;
+      width: 330px;
+      flex-direction: column;
+      gap: 13px;
+      padding: 22px 22px 18px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.30);
+      background: linear-gradient(145deg, rgba(10,10,11, 0.98) 0%, rgba(5,5,5, 0.98) 100%);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255,255,255,0.10);
+      backdrop-filter: blur(20px);
+      transition: top 0.30s cubic-bezier(.4,0,.2,1), left 0.30s cubic-bezier(.4,0,.2,1);
+    }
+    #tour-card.active { display: flex; }
+
+    /* Directional arrow on the card */
+    #tour-card::before {
+      content: '';
+      position: absolute;
+      width: 11px; height: 11px;
+      background: rgba(10,10,11, 0.98);
+      border: 1px solid rgba(255,255,255,0.30);
+    }
+    #tour-card.arrow-left::before   { left: -6px;   top: 24px; border-right: none; border-top: none;    transform: rotate(45deg); }
+    #tour-card.arrow-right::before  { right: -6px;  top: 24px; border-left: none;  border-bottom: none; transform: rotate(45deg); }
+    #tour-card.arrow-top::before    { top: -6px;    left: 22px; border-right: none; border-bottom: none; transform: rotate(45deg); }
+    #tour-card.arrow-bottom::before { bottom: -6px; left: 22px; border-left: none;  border-top: none;    transform: rotate(45deg); }
+
+    /* Card internals */
+    .tour-step-meta {
+      font-size: 0.64rem; font-weight: 800;
+      color: #9a9a9a; letter-spacing: 0.10em; text-transform: uppercase;
+    }
+    .tour-card-title {
+      font-size: 0.95rem; font-weight: 700; color: #e5e5e5; line-height: 1.3;
+    }
+    .tour-card-body {
+      font-size: 0.78rem; color: #777777; line-height: 1.65;
+    }
+    .tour-card-body strong { color: #cfcfcf; }
+    .tour-card-body em     { color: #b4b4b4; font-style: normal; }
+    .tour-card-body code   { font-family: 'Consolas', monospace; font-size: 0.72rem;
+                              background: rgba(255,255,255,0.14); border-radius: 4px; padding: 1px 5px;
+                              color: #b4b4b4; }
+    .tour-card-nav {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 4px;
+    }
+    .tour-nav-right  { display: flex; gap: 8px; align-items: center; }
+    .tour-btn-skip {
+      background: none; border: none; padding: 0;
+      color: #4d4d4d; font-size: 0.70rem; cursor: pointer;
+      transition: color 0.15s;
+    }
+    .tour-btn-skip:hover { color: #777777; }
+    .tour-btn-prev, .tour-btn-next {
+      padding: 7px 16px; border-radius: 8px;
+      font-size: 0.74rem; font-weight: 700; cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .tour-btn-prev {
+      background: rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.28);
+      color: #9a9a9a;
+    }
+    .tour-btn-prev:hover { background: rgba(255,255,255,0.22); }
+    .tour-btn-next {
+      background: linear-gradient(135deg, #777777 0%, #9a9a9a 100%);
+      border: 1px solid transparent;
+      color: #fff;
+    }
+    .tour-btn-next:hover { background: linear-gradient(135deg, #4d4d4d 0%, #777777 100%); }
+    .tour-btn-next.done  { background: linear-gradient(135deg, #4d4d4d 0%, #777777 100%); }
+    .tour-btn-next.done:hover { background: linear-gradient(135deg, #4d4d4d 0%, #4d4d4d 100%); }
+
+    /* ============================================================ */
+    /*  Phase A — canvas-first, two-state instrument shell           */
+    /*  Driven entirely by body[data-status]: idle | arming | live   */
+    /* ============================================================ */
+
+    /* Stage: the live feed fills the whole middle row, fullbleed. */
+    #body { display: block; position: relative; overflow: hidden; }
+    #main { position: absolute; inset: 0; padding: 0; }
+    #video-shell {
+      width: 100%; height: 100%;
+      border-radius: 0; border: none; box-shadow: none;
+      background: #000;
+    }
+
+    /* Dimming scrim behind the console; lifts when live so the feed owns the frame. */
+    #body::before {
+      content: ""; position: absolute; inset: 0; z-index: 10; pointer-events: none;
+      background: radial-gradient(ellipse at center, rgba(0,0,0,0.55), rgba(0,0,0,0.86));
+      transition: opacity .45s ease;
+    }
+    body[data-status="live"] #body::before { opacity: 0; }
+
+    /* Sidebar → centered, floating "connect console" (glass-strong). */
+    #sidebar {
+      position: absolute; z-index: 20;
+      top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 440px; max-width: calc(100vw - 48px); max-height: 86vh;
+      padding: 22px;
+      border: 1px solid var(--line-2); border-right: 1px solid var(--line-2);
+      border-radius: var(--radius-lg);
+      background: rgba(10,10,11,0.72);
+      backdrop-filter: blur(32px) saturate(120%);
+      -webkit-backdrop-filter: blur(32px) saturate(120%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 40px 120px rgba(0,0,0,0.85);
+      gap: 0;
+      transition: opacity .4s ease, transform .4s cubic-bezier(.4,0,.2,1);
+    }
+    body[data-status="live"] #sidebar {
+      opacity: 0; pointer-events: none;
+      transform: translate(-50%, -47%) scale(0.985);
+    }
+    /* Inner panels become flush sections (lose their own card chrome). */
+    #sidebar > .panel {
+      background: transparent; border: none; box-shadow: none;
+      backdrop-filter: none; -webkit-backdrop-filter: none;
+      padding: 16px 0 0; border-radius: 0; border-top: 1px solid var(--line-1);
+    }
+    #sidebar > .panel:first-child { border-top: none; padding-top: 0; }
+    /* Phase A: hide non-setup sections in the console (Preview / Monitor / Help
+       move into the ⌘, drawer in a later phase). */
+    #sidebar > .panel:nth-child(n+5) { display: none; }
+
+    /* Header → slim status rail. */
+    #header { padding: 11px 18px; background: rgba(5,5,5,0.7); }
+    #status-badge { font-family: var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; }
+    #current-pod  { font-family: var(--font-mono); }
+
+    /* Footer → transport. Disconnect only shows while live. */
+    #footer #btn-stop { padding: 7px 16px; font-size: 0.72rem; width: auto; margin: 0; }
+    body[data-status="idle"]   #footer #btn-stop,
+    body[data-status="arming"] #footer #btn-stop { display: none; }
+
+    /* ============================================================ */
+    /*  Phase B — connect console (terminal form)                    */
+    /* ============================================================ */
+    #sidebar { gap: 16px; }
+    .console-head { margin-bottom: 2px; }
+    .console-wordmark {
+      font-family: var(--font-pixel); font-size: 1.15rem; color: var(--text-0);
+      letter-spacing: 0.04em; line-height: 1;
+    }
+    .console-tag {
+      font-family: var(--font-mono); font-size: 0.58rem; color: var(--text-2);
+      letter-spacing: 0.2em; margin-top: 9px;
+    }
+    .cf { display: flex; flex-direction: column; gap: 9px; }
+    .cf-prompt {
+      font-family: var(--font-ui); font-size: 0.82rem; color: var(--text-1);
+      letter-spacing: 0; font-weight: 500;
+    }
+    .cf-line { display: flex; align-items: center; gap: 8px; }
+    .cf-input {
+      flex: 1; width: 100%;
+      background: var(--bg-1); border: 1px solid var(--line-1);
+      border-radius: var(--radius); padding: 11px 13px;
+      color: var(--text-0); font-family: var(--font-mono); font-size: 0.82rem;
+      outline: none; transition: border-color .15s, background .15s;
+    }
+    .cf-input::placeholder { color: var(--text-3); }
+    .cf-input:focus { border-color: var(--line-2); background: var(--glass-1); }
+    .cf-select { appearance: none; -webkit-appearance: none; cursor: pointer; }
+    .cf-check { font-family: var(--font-mono); font-size: 0.9rem; width: 1.1em; text-align: center; color: var(--text-3); }
+    .cf-check[data-state="ok"]  { color: var(--text-0); }
+    .cf-check[data-state="bad"] { color: var(--text-2); }
+
+    .dropzone {
+      position: relative; display: flex; align-items: center; gap: 12px;
+      background: var(--bg-1); border: 1px dashed var(--line-2);
+      border-radius: var(--radius); padding: 12px 13px; cursor: pointer;
+      transition: border-color .15s, background .15s;
+    }
+    .dropzone:hover { border-color: var(--text-3); background: var(--glass-2); }
+    .dropzone.dragover { border-color: var(--accent); background: var(--glass-3); }
+    #face-preview {
+      width: 44px; height: 44px; border-radius: var(--radius-sm); object-fit: cover;
+      border: 1px solid var(--line-1); display: none; flex: 0 0 auto;
+    }
+    .dropzone.has-face #face-preview { display: block; }
+    .dropzone.has-face .dz-empty { display: none; }
+    .dz-empty { display: flex; align-items: center; gap: 10px; flex: 1; }
+    .dz-glyph { font-size: 1.2rem; color: var(--text-3); }
+    .dz-text { font-size: 0.78rem; color: var(--text-2); }
+    .cf-ghost {
+      margin-left: auto; flex: 0 0 auto;
+      background: var(--glass-2); border: 1px solid var(--line-1);
+      border-radius: var(--radius); padding: 8px 15px;
+      color: var(--text-1); font-family: var(--font-ui); font-size: 0.76rem;
+      font-weight: 500; cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+    .cf-ghost:hover { background: var(--glass-3); color: var(--text-0); }
+    #face-input { display: none; }
+
+    .cf-connect {
+      margin-top: 4px; width: 100%;
+      background: var(--accent); color: #000;
+      border: none; border-radius: var(--radius); padding: 13px;
+      font-family: var(--font-ui); font-size: 0.9rem; font-weight: 600;
+      letter-spacing: 0.01em; cursor: pointer;
+      transition: opacity .15s, transform .08s;
+    }
+    .cf-connect:hover { opacity: 0.88; }
+    .cf-connect:active { transform: translateY(1px); }
+    .cf-connect:disabled { background: var(--glass-2); color: var(--text-3); cursor: not-allowed; }
+
+    .console-foot {
+      font-family: var(--font-mono); font-size: 0.56rem; color: var(--text-3);
+      letter-spacing: 0.16em; text-align: center; margin-top: 2px;
+    }
+    #sidebar .segmented { gap: 8px; }
+
+    /* ============================================================ */
+    /*  Phase C — connect handshake terminal                        */
+    /* ============================================================ */
+    #handshake { display: none; }
+    body[data-status="arming"] #handshake { display: block; }
+    body[data-status="arming"] #sidebar .cf,
+    body[data-status="arming"] #sidebar .cf-connect,
+    body[data-status="arming"] #sidebar .console-foot { display: none; }
+    .hs-head {
+      font-family: var(--font-mono); font-size: 0.6rem; color: var(--text-2);
+      letter-spacing: 0.18em; text-transform: uppercase; margin-bottom: 14px;
+    }
+    #hs-log { display: flex; flex-direction: column; gap: 10px; }
+    .hs-line {
+      display: flex; align-items: center; gap: 10px;
+      font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-1);
+      opacity: 0; transform: translateY(3px); animation: hs-in .26s ease forwards;
+    }
+    @keyframes hs-in { to { opacity: 1; transform: none; } }
+    .hs-mark { width: 1em; text-align: center; color: var(--text-3); flex: 0 0 auto; }
+    .hs-line[data-state="run"] .hs-mark { animation: hs-blink 1s steps(2,start) infinite; }
+    @keyframes hs-blink { 50% { opacity: 0.2; } }
+    .hs-line[data-state="ok"] { color: var(--text-2); }
+    .hs-line[data-state="ok"] .hs-mark { color: var(--text-0); }
+    .hs-line.hs-live {
+      color: var(--text-0); font-weight: 600; margin-top: 6px; letter-spacing: 0.04em;
+    }
+    .hs-line.hs-live .hs-mark { color: var(--accent); }
+
+    /* ============================================================ */
+    /*  Phase D — instrument ledger + auto-hiding chrome            */
+    /* ============================================================ */
+    #header, #footer, #overlay, #conn-score-pill { transition: opacity .45s ease; }
+    body.chrome-idle[data-status="live"] #header,
+    body.chrome-idle[data-status="live"] #footer,
+    body.chrome-idle[data-status="live"] #overlay,
+    body.chrome-idle[data-status="live"] #conn-score-pill {
+      opacity: 0; pointer-events: none;
+    }
+    /* transport (footer) reads as an instrument bar */
+    #footer { font-family: var(--font-mono); letter-spacing: 0.04em; }
+    #footer #log { color: var(--text-2); }
+    #footer #obs-hint #obs-url { color: var(--text-1); }
+
+    /* ============================================================ */
+    /*  Phase E — command palette (⌘K) + settings drawer (⌘,)       */
+    /* ============================================================ */
+    #drawer-scrim, #palette-scrim {
+      position: fixed; inset: 0; z-index: 90;
+      background: rgba(0,0,0,0.5); opacity: 0; pointer-events: none;
+      transition: opacity .25s ease;
+    }
+    body.drawer-open #drawer-scrim, body.palette-open #palette-scrim { opacity: 1; pointer-events: auto; }
+
+    #settings-drawer {
+      position: fixed; top: 0; right: 0; bottom: 0; z-index: 100;
+      width: 360px; max-width: 92vw;
+      background: rgba(10,10,11,0.86);
+      border-left: 1px solid var(--line-2);
+      backdrop-filter: blur(32px) saturate(120%);
+      -webkit-backdrop-filter: blur(32px) saturate(120%);
+      box-shadow: -40px 0 120px rgba(0,0,0,0.8);
+      transform: translateX(100%); transition: transform .3s cubic-bezier(.4,0,.2,1);
+      padding: 22px; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 22px;
+    }
+    body.drawer-open #settings-drawer { transform: none; }
+    .drawer-head { display: flex; align-items: center; justify-content: space-between; }
+    .drawer-title { font-family: var(--font-ui); font-size: 1rem; font-weight: 600; color: var(--text-0); }
+    .drawer-x {
+      background: none; border: none; color: var(--text-2); font-size: 0.85rem; cursor: pointer;
+      width: 28px; height: 28px; border-radius: var(--radius-sm);
+    }
+    .drawer-x:hover { background: var(--glass-2); color: var(--text-0); }
+    .drawer-sect { display: flex; flex-direction: column; gap: 11px;
+      border-top: 1px solid var(--line-1); padding-top: 18px; }
+    .drawer-sect:first-of-type { border-top: none; padding-top: 0; }
+    .drawer-label { font-family: var(--font-ui); font-size: 0.82rem; color: var(--text-1); font-weight: 500; }
+    .drawer-hint { font-size: 0.72rem; color: var(--text-3); line-height: 1.5; }
+    .drawer-slider { display: flex; align-items: center; gap: 12px; font-size: 0.76rem; color: var(--text-2); }
+    .drawer-slider > span:first-child { width: 78px; flex: 0 0 auto; }
+    .drawer-slider input[type="range"] { flex: 1; }
+    .drawer-slider .val { font-family: var(--font-mono); color: var(--text-0); width: 38px; text-align: right; }
+    .drawer-link {
+      background: none; border: none; text-align: left; cursor: pointer; padding: 0;
+      color: var(--text-1); font-family: var(--font-ui); font-size: 0.82rem;
+    }
+    .drawer-link:hover { color: var(--text-0); }
+    #settings-drawer .cf-input { flex: 1; }
+
+    #command-palette {
+      position: fixed; top: 18vh; left: 50%; transform: translateX(-50%) scale(0.98); z-index: 100;
+      width: min(560px, 92vw);
+      background: rgba(10,10,11,0.82);
+      border: 1px solid var(--line-2); border-radius: var(--radius-lg);
+      backdrop-filter: blur(32px) saturate(120%);
+      -webkit-backdrop-filter: blur(32px) saturate(120%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 40px 120px rgba(0,0,0,0.85);
+      opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease;
+      overflow: hidden;
+    }
+    body.palette-open #command-palette { opacity: 1; pointer-events: auto; transform: translateX(-50%) scale(1); }
+    #palette-input {
+      width: 100%; background: none; border: none; outline: none;
+      padding: 16px 18px; color: var(--text-0); font-family: var(--font-ui); font-size: 0.95rem;
+      border-bottom: 1px solid var(--line-1);
+    }
+    #palette-input::placeholder { color: var(--text-3); }
+    #palette-list { max-height: 320px; overflow-y: auto; padding: 6px; }
+    .pal-item {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer;
+      font-family: var(--font-ui); font-size: 0.85rem; color: var(--text-1);
+    }
+    .pal-item .pal-hint { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-3); }
+    .pal-item.sel, .pal-item:hover { background: var(--glass-2); color: var(--text-0); }
+    .pal-empty { padding: 16px 18px; color: var(--text-3); font-size: 0.82rem; }
+    #palette-foot { padding: 9px 14px; border-top: 1px solid var(--line-1); font-size: 0.64rem; color: var(--text-3); }
+    #palette-foot .mono, .drawer-hint .mono { font-family: var(--font-mono); color: var(--text-2); }
+
+    /* ============================================================ */
+    /*  Phase F — minimal splash                                    */
+    /* ============================================================ */
+    #launch-card {
+      padding: 0; background: none; border: none; box-shadow: none;
+      backdrop-filter: none; -webkit-backdrop-filter: none;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .launch-wordmark {
+      font-family: var(--font-pixel);
+      font-size: clamp(2rem, 12vw, 6.5rem);
+      letter-spacing: 0.03em; line-height: 1;
+      display: flex; gap: 0.02em; white-space: nowrap;
+    }
+    .launch-wordmark span {
+      color: var(--text-3); opacity: 0.14;
+      transition: color .6s ease, opacity .6s ease;
+    }
+    .launch-wordmark span.lit { color: var(--text-0); opacity: 1; }
+
+    /* ============================================================ */
+    /*  Status rail + transport redesign                            */
+    /* ============================================================ */
+    #header { padding: 0 18px; height: 52px; align-items: center; }
+    #branding-sub { display: none; }
+    #branding-title { font-size: 1rem; }
+    #header-right { gap: 10px; }
+    #current-pod {
+      font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-2);
+      background: none; border: none; padding: 0; border-radius: 0;
+      max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #status-badge {
+      font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--text-1); font-weight: 500;
+      display: inline-flex; align-items: center; gap: 7px;
+      background: var(--glass-1); border: 1px solid var(--line-1);
+      border-radius: 999px; padding: 5px 12px;
+    }
+    #status-badge::before {
+      content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-2);
+    }
+    body[data-status="live"]   #status-badge::before { background: var(--on); }
+    body[data-status="arming"] #status-badge::before { background: var(--warn); animation: hs-blink 1s steps(2,start) infinite; }
+    #rail-cmdk {
+      font-family: var(--font-mono); font-size: 0.64rem; color: var(--text-2);
+      background: var(--glass-1); border: 1px solid var(--line-1);
+      border-radius: var(--radius-sm); padding: 6px 9px; cursor: pointer;
+    }
+    #rail-cmdk:hover { background: var(--glass-2); color: var(--text-0); }
+
+    #footer { padding: 0 18px; height: 52px; justify-content: space-between; }
+    .tp-left  { display: flex; align-items: center; gap: 10px; }
+    .tp-right { display: flex; align-items: center; gap: 16px; color: var(--text-2); font-size: 0.66rem; }
+    .tp-right #obs-hint #obs-url { color: var(--text-1); }
+    .tp-btn {
+      background: var(--glass-2); border: 1px solid var(--line-1);
+      color: var(--text-1); font-family: var(--font-ui); font-size: 0.74rem;
+      border-radius: var(--radius-sm); padding: 7px 13px; cursor: pointer;
+    }
+    .tp-btn:hover { background: var(--glass-3); color: var(--text-0); }
+    /* live-only transport controls */
+    body[data-status="idle"]   #btn-face-live, body[data-status="arming"] #btn-face-live,
+    body[data-status="idle"]   #footer .btn-record, body[data-status="arming"] #footer .btn-record,
+    body[data-status="idle"]   #footer #rec-audio-wrap, body[data-status="arming"] #footer #rec-audio-wrap { display: none; }
+
+    /* ── Config: persistent right sidebar (was a slide-in drawer) ── */
+    #settings-drawer {
+      position: fixed; top: 52px; bottom: 52px; right: 0; left: auto;
+      width: 320px; max-width: 38vw; max-height: none;
+      transform: none;                 /* always visible */
+      border-left: 1px solid var(--line-1); border-top: 1px solid var(--line-1);
+      border-radius: 0; box-shadow: none;
+      background: rgba(8,8,9,0.55);
+      backdrop-filter: blur(24px) saturate(120%);
+      -webkit-backdrop-filter: blur(24px) saturate(120%);
+      z-index: 40;
+    }
+    #drawer-scrim { display: none !important; }
+    #drawer-close { display: none; }
+    /* The stage stops at the config sidebar — video, cam PiP and HUD overlays
+       all live inside #video-shell, so they shift left automatically. */
+    #main { right: 320px; }
+    /* Re-centre the connect console within the remaining stage area. */
+    #sidebar { left: calc(50% - 160px); }
+
+    /* ── Unified transport controls (one consistent style) ── */
+    #footer .btn-record,
+    #footer .rec-audio-select,
+    #footer .tp-btn {
+      height: 32px; box-sizing: border-box;
+      display: inline-flex; align-items: center; gap: 7px;
+      margin: 0; padding: 0 13px; border-radius: var(--radius-sm);
+      border: 1px solid var(--line-1); background: var(--glass-2);
+      color: var(--text-1); font-family: var(--font-ui); font-size: 0.74rem; font-weight: 500;
+      letter-spacing: 0; cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+    }
+    #footer .btn-record:hover,
+    #footer .rec-audio-select:hover,
+    #footer .tp-btn:hover { background: var(--glass-3); color: var(--text-0); border-color: var(--line-2); }
+    #footer .btn-record svg { width: 10px; height: 10px; fill: currentColor; }
+    #footer .btn-record.recording { color: var(--text-0); border-color: var(--line-2); background: var(--glass-3); }
+    #footer .btn-record.recording svg { fill: #fff; animation: recDotBlink 1.2s infinite; }
+    #footer .rec-audio-select { appearance: none; -webkit-appearance: none; padding-right: 26px; max-width: 150px; }
+    #footer .rec-timer {
+      height: 32px; box-sizing: border-box; display: none; align-items: center; gap: 6px;
+      background: none; border: none; padding: 0 4px;
+      font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-1);
+    }
+    #footer .rec-timer.visible { display: inline-flex; }
+    #footer .rec-timer .rec-dot { background: var(--accent); }
+
+    /* ── Save toast → floating glass card (bottom-right) ── */
+    .rec-save-bar {
+      top: auto; bottom: 20px; left: auto; right: 20px;
+      width: auto; max-width: 420px;
+      gap: 12px; padding: 13px 16px;
+      background: rgba(10,10,11,0.82);
+      border: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2);
+      border-radius: var(--radius-lg);
+      backdrop-filter: blur(28px) saturate(120%);
+      -webkit-backdrop-filter: blur(28px) saturate(120%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 24px 70px rgba(0,0,0,0.7);
+      transform: translateY(16px); opacity: 0;
+      transition: transform .3s cubic-bezier(.4,0,.2,1), opacity .3s ease;
+    }
+    .rec-save-bar.visible { transform: translateY(0); opacity: 1; }
+    .rec-save-bar.done { border-color: var(--line-2); }
+    .rec-save-spinner { width: 18px; height: 18px; border-width: 2px; border-color: var(--line-2); border-top-color: var(--text-0); }
+    .rec-save-check { width: 18px; height: 18px; fill: var(--text-0); }
+    .rec-save-label { font-family: var(--font-ui); font-weight: 600; font-size: 0.82rem; color: var(--text-0); }
+    .rec-save-bar.done .rec-save-label { color: var(--text-0); }
+    .rec-save-sub { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-3); }
+    .rec-save-progress { background: var(--line-1); height: 3px; max-width: 160px; }
+    .rec-save-progress-fill { background: var(--accent); }
+    .rec-save-open-btn {
+      padding: 6px 13px; border-radius: var(--radius-sm); border: 1px solid var(--line-1);
+      background: var(--glass-2); color: var(--text-1); font-family: var(--font-ui); font-size: 0.72rem; font-weight: 500;
+    }
+    .rec-save-open-btn:hover { background: var(--glass-3); color: var(--text-0); border-color: var(--line-2); }
+    .rec-save-dismiss {
+      border: 1px solid var(--line-1); background: none; color: var(--text-2);
+      border-radius: var(--radius-sm); padding: 5px 9px; font-size: 0.72rem;
+    }
+    .rec-save-dismiss:hover { color: var(--text-0); border-color: var(--line-2); }
+  </style>
+</head>
+<body data-status="idle">
+  <div id="launch-overlay">
+    <div id="launch-card">
+      <div class="launch-wordmark" id="launch-wordmark" aria-label="Purplefinger"><span>P</span><span>U</span><span>R</span><span>P</span><span>L</span><span>E</span><span>F</span><span>I</span><span>N</span><span>G</span><span>E</span><span>R</span></div>
+    </div>
+  </div>
+
+  <!-- Top saving bar -->
+  <div class="rec-save-bar" id="rec-save-bar">
+    <div class="rec-save-spinner"></div>
+    <svg class="rec-save-check" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+    <div class="rec-save-label" id="rec-save-label">Saving…</div>
+    <div class="rec-save-progress"><div class="rec-save-progress-fill" id="rec-save-progress-fill"></div></div>
+    <div class="rec-save-sub" id="rec-save-sub">Converting to MP4</div>
+    <button class="rec-save-open-btn" id="rec-save-open-btn">📂 Open Saved</button>
+    <button class="rec-save-dismiss" id="rec-save-dismiss">✕</button>
+  </div>
+
+  <header id="header">
+    <div id="branding">
+      <div id="branding-title">PURPLEFINGER</div>
+    </div>
+    <div id="header-right">
+      <div id="current-pod">—</div>
+      <div id="status-badge">Idle</div>
+      <button id="rail-cmdk" type="button" title="Command palette (⌘K)">⌘K</button>
+    </div>
+  </header>
+
+  <div id="body">
+    <aside id="sidebar">
+      <div class="console-head">
+        <div class="console-wordmark">PURPLEFINGER</div>
+        <div class="console-tag">CLOUD GPU · REALTIME FACE PIPELINE</div>
+      </div>
+
+      <div class="cf">
+        <div class="cf-prompt">GPU node</div>
+        <div class="cf-line">
+          <input id="cfg-backend-url" class="cf-input" type="text" spellcheck="false"
+                 autocapitalize="off" autocorrect="off" placeholder="ws://127.0.0.1:8765" />
+          <span class="cf-check" id="gpu-url-check" data-state="empty">○</span>
+        </div>
+      </div>
+
+      <div class="cf">
+        <div class="cf-prompt">Identity</div>
+        <div class="dropzone" id="face-dropzone">
+          <img id="face-preview" alt="" />
+          <div class="dz-empty">
+            <span class="dz-glyph">◍</span>
+            <span class="dz-text">drop a face image, or browse</span>
+          </div>
+          <button id="btn-upload" class="cf-ghost" type="button">Browse</button>
+          <input type="file" id="face-input" accept="image/*" />
+        </div>
+      </div>
+
+      <div class="cf">
+        <div class="cf-prompt">Camera</div>
+        <select id="cfg-camera" class="cf-input cf-select">
+          <option value="">Default Camera</option>
+        </select>
+      </div>
+
+
+      <button id="btn-start" class="cf-connect" type="button">Connect</button>
+      <div class="console-foot">OBS Browser Source · localhost:7891</div>
+
+      <!-- Handshake: replaces the fields while arming, then dissolves into the feed -->
+      <div id="handshake">
+        <div class="hs-head">Connecting</div>
+        <div id="hs-log"></div>
+      </div>
+
+      <!-- preserved for JS / persistence -->
+      <input id="cfg-api-token" type="hidden" />
+      <input id="cfg-warm-pod-id" type="hidden" />
+      <div id="config-note" hidden></div>
+      <div id="mode-summary" hidden></div>
+    </aside>
+
+    <!-- Deferred controls — hidden now, moved into the ⌘, settings drawer and the
+         instrument cluster in later phases. Kept in the DOM so JS hooks survive. -->
+    <div id="deferred-ui" hidden>
+      <button id="btn-mode-realtime" class="active" type="button"></button>
+      <button id="btn-mode-quality" type="button"></button>
+      <div id="stats-grid">
+        <div class="stat-box"><div class="stat-label">Sent FPS</div><div class="stat-val" id="st-send-fps">—</div></div>
+        <div class="stat-box"><div class="stat-label">Recv FPS</div><div class="stat-val" id="st-recv-fps">—</div></div>
+        <div class="stat-box"><div class="stat-label">Latency</div><div class="stat-val" id="st-latency">—</div></div>
+        <div class="stat-box"><div class="stat-label">Mode / Cap</div><div class="stat-val" id="st-mode">—</div></div>
+        <div class="stat-box"><div class="stat-label">Connection</div><div class="stat-val" id="st-conn-score">—</div></div>
+      </div>
+    </div>
+
+    <main id="main">
+      <div id="video-shell">
+        <canvas id="remote-canvas"></canvas>
+        <div id="video-empty">
+          <!-- Idle state -->
+          <div id="idle-state">
+            <div class="empty-icon">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v14z"/></svg>
+            </div>
+            <strong>Ready for live monitoring</strong>
+            <div>Start a session to view the swapped output, local camera PiP, and stream health at a glance.</div>
+          </div>
+          <!-- Loading state -->
+          <div id="session-loader">
+            <div class="session-spinner"></div>
+            <div class="session-loader-text" id="loader-text">Starting session...</div>
+            <div class="session-loader-sub" id="loader-sub">Provisioning a GPU pod. This usually takes 30–90 seconds.</div>
+            <div class="session-loader-elapsed" id="loader-elapsed"></div>
+          </div>
+        </div>
+        <div id="overlay">
+          <div class="hud-pill">Mode <span id="ov-mode">—</span></div>
+          <div class="hud-pill">Send <span id="ov-send-fps">—</span></div>
+          <div class="hud-pill">Recv <span id="ov-recv-fps">—</span></div>
+          <div class="hud-pill">Latency <span id="ov-latency">—</span></div>
+          <div class="hud-pill" id="light-pill">Light <span id="light-pill-score">—</span></div>
+        </div>
+
+        <!-- Connectivity Score (top-right) -->
+        <div id="conn-score-pill">
+          <div class="score-ring">
+            <svg viewBox="0 0 36 36">
+              <circle class="score-ring-bg" cx="18" cy="18" r="15.5" />
+              <circle class="score-ring-fg" id="score-ring-fg" cx="18" cy="18" r="15.5"
+                      stroke-dasharray="97.4" stroke-dashoffset="97.4" />
+            </svg>
+            <div class="score-ring-label" id="score-pct">—</div>
+          </div>
+          <div>
+            <div class="conn-title">Network Connection</div>
+            <div class="conn-grade" id="conn-grade">—</div>
+            <div class="conn-hint" id="conn-hint"></div>
+          </div>
+        </div>
+
+        <!-- Reconnect banner (shown when feed clogs) -->
+        <div id="reconnect-banner">
+          <span class="banner-text" id="reconnect-msg">Feed stalled — connection degraded</span>
+          <button id="btn-reconnect">⟳ Reconnect</button>
+        </div>
+
+        <!-- Privacy Shield (auto-hides video on poor network) -->
+        <div id="privacy-shield">
+          <svg class="shield-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/>
+          </svg>
+          <div class="shield-title" id="shield-title">Video Hidden — Poor Connection</div>
+          <div class="shield-sub" id="shield-sub">Your stream is temporarily hidden to protect your identity while the connection recovers. Video will resume automatically when quality improves.</div>
+          <div class="shield-score" id="shield-score"></div>
+        </div>
+        <!-- Light Quality Gate Overlay (blocks swap when lighting is too poor) -->
+        <div id="light-overlay">
+          <!-- Material Design wb_sunny icon -->
+          <svg class="light-gate-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M6.76 4.84l-1.8-1.79-1.41 1.41 1.79 1.79 1.42-1.41zM4 11H1v2h3v-2zm10-8h-2V1h2v2zm4.96 1.25l-1.41-1.41-1.79 1.79 1.41 1.41 1.79-1.79zM17.24 19.16l1.79 1.8 1.41-1.41-1.8-1.79-1.4 1.4zM20 11v2h3v-2h-3zm-8-5c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm-1 13h2v3h-2v-3zm-7.45-.96l1.41 1.41 1.79-1.8-1.41-1.41-1.79 1.8z"/>
+          </svg>
+          <div class="light-overlay-title">Poor Lighting — Swap Paused</div>
+          <div class="light-overlay-issue" id="light-overlay-issue">Adjust your lighting to resume.</div>
+          <div class="light-overlay-sub">Streaming will resume automatically once conditions improve.</div>
+          <div class="light-overlay-score" id="light-overlay-score"></div>
+        </div>
+
+        <!-- Audio Level Meter (bottom-left) -->
+        <div id="audio-meter">
+          <svg class="meter-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+          <div class="meter-bar" id="mb0"></div>
+          <div class="meter-bar" id="mb1"></div>
+          <div class="meter-bar" id="mb2"></div>
+          <div class="meter-bar" id="mb3"></div>
+          <div class="meter-bar" id="mb4"></div>
+          <div class="meter-bar" id="mb5"></div>
+          <div class="meter-bar" id="mb6"></div>
+          <div class="meter-bar" id="mb7"></div>
+        </div>
+        <!-- Camera PiP placeholder (shown when camera not active) -->
+        <div id="cam-placeholder">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+          <span>Camera</span>
+        </div>
+        <video id="local-video" autoplay playsinline muted></video>
+      </div>
+    </main>
+  </div>
+
+  <footer id="footer">
+    <div class="tp-left">
+      <button id="btn-stop" class="danger-btn">Disconnect</button>
+      <button id="btn-face-live" class="tp-btn" type="button" title="Change source face">Change face</button>
+      <button id="btn-record" class="btn-record" title="Record session (video + audio)">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8"/></svg>
+        <span id="btn-record-label">Record</span>
+      </button>
+      <div class="rec-audio-select-wrap" id="rec-audio-wrap">
+        <select class="rec-audio-select" id="rec-audio-select" title="Audio source for recording">
+          <option value="default-mic" selected>Microphone</option>
+          <option value="none">No audio</option>
+        </select>
+      </div>
+      <span class="rec-timer" id="rec-timer"><span class="rec-dot"></span><span id="rec-timer-text">00:00</span></span>
+    </div>
+    <div class="tp-right">
+      <span id="log">Ready</span>
+      <span id="obs-hint">OBS → <span id="obs-url">http://localhost:7891</span></span>
+    </div>
+  </footer>
+
+  <!-- Notifications Popup Overlay -->
+  <div id="tutorial-overlay">
+    <div id="tutorial-card">
+      <div id="tutorial-topbar">
+        <div id="tutorial-topbar-left">
+          <span class="launch-dot"></span>
+          <span class="launch-dot"></span>
+          <span class="launch-dot"></span>
+          <div id="tutorial-title">Setup Guide — Chimera Lite</div>
+        </div>
+        <button id="btn-close-tutorial">✕  Close</button>
+      </div>
+
+      <div id="tutorial-body">
+
+        <div class="tut-section">
+          <h2>How It Works</h2>
+          <p>Chimera Lite swaps your face in real time on a remote GPU and streams the result back to your PC. The swapped video is served as a <strong>Browser Source</strong> that OBS captures. From OBS, you route the video through <strong>DroidCam's virtual camera</strong> — which apps like <strong>WhatsApp Desktop, Zoom, Google Meet</strong>, and others recognize as a real webcam.</p>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- STEP 1 -->
+        <div class="tut-section">
+          <h2>Step 1 — Install a virtual camera (DroidCam)</h2>
+          <p>To route the swapped video into other apps as a webcam, install DroidCam's
+             virtual-camera driver + OBS plugin from the official site (free):</p>
+          <ol>
+            <li><strong>DroidCam Client</strong> — installs the virtual webcam device other apps see.</li>
+            <li><strong>OBS VirtualOutput / DroidCamOBS plugin</strong> — routes OBS output to that virtual device.</li>
+          </ol>
+          <p>After installing, <strong>restart your PC</strong> once for the virtual camera driver to register.
+             (Any OBS virtual-camera solution works — DroidCam is just one option.)</p>
+          <button id="btn-open-drivers" class="tut-btn">Download DroidCam →</button>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- STEP 2 -->
+        <div class="tut-section">
+          <h2>Step 2 — Configure OBS Studio</h2>
+          <p>Open OBS Studio (download from <code>obsproject.com</code> if you don't have it).</p>
+
+          <h3>2a. Add the Browser Source</h3>
+          <ol>
+            <li>In the <strong>Sources</strong> panel, click <strong>+</strong> → <strong>Browser</strong>.</li>
+            <li>Name it <code>Chimera Face Swap</code> (or anything you like).</li>
+            <li>Set the URL to: <code id="tut-obs-url">http://localhost:7891</code></li>
+            <li>Set <strong>Width</strong> to <code>512</code> and <strong>Height</strong> to <code>288</code>.</li>
+            <li>Check <strong>"Shutdown source when not visible"</strong> to save resources when you switch scenes.</li>
+            <li>Click <strong>OK</strong>. You should see a black rectangle — it will show the swapped video once a session is running.</li>
+          </ol>
+
+          <h3>2b. Set Up Audio (Microphone)</h3>
+          <ol>
+            <li>Go to <strong>Settings → Audio</strong>.</li>
+            <li>Under <strong>Mic/Auxiliary Audio</strong>, select your real microphone (e.g. <code>Microphone (Realtek Audio)</code>).</li>
+            <li>Leave Desktop Audio on Default or disabled — you only need your mic for calls.</li>
+            <li>Click <strong>Apply</strong> → <strong>OK</strong>.</li>
+          </ol>
+
+          <h3>2c. Scene Layout</h3>
+          <ol>
+            <li>Right-click the Browser Source in the preview → <strong>Transform → Fit to Screen</strong>. This fills the canvas.</li>
+            <li>That's your only source — the face-swapped video. Your real mic is captured separately via the audio settings.</li>
+          </ol>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- STEP 3 -->
+        <div class="tut-section">
+          <h2>Step 3 — Activate DroidCam Virtual Output</h2>
+          <p>This is the key step that makes WhatsApp and other apps see your swapped face as a real webcam.</p>
+          <ol>
+            <li>In OBS, go to the menu bar → <strong>Tools → DroidCam OBS Virtual Output</strong>.</li>
+            <li>Click <strong>Start</strong> in the dialog that appears.</li>
+            <li>The status should change to <strong>"Active"</strong>. OBS is now routing the canvas output (your swapped face) to the DroidCam virtual camera device.</li>
+          </ol>
+          <div class="tut-highlight">
+            <strong>Why DroidCam instead of OBS Virtual Camera?</strong><br>
+            WhatsApp Desktop, some Zoom versions, and other apps don't recognize the default OBS Virtual Camera. DroidCam's virtual device registers as a standard DirectShow webcam, so every app sees it — WhatsApp, Zoom, Meet, Teams, Discord, etc.
+          </div>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- STEP 4 -->
+        <div class="tut-section">
+          <h2>Step 4 — Start Chimera Lite</h2>
+          <ol>
+            <li>In the Chimera Lite app, <strong>upload your source face</strong> (the identity photo you want to appear as).</li>
+            <li>Click <strong>Start Session</strong>. Wait for the GPU pod to boot (~30-90 seconds).</li>
+            <li>Once connected, your webcam feed is sent to the GPU, swapped in real time, and streamed back.</li>
+            <li>Check the OBS preview — your Browser Source should now show the face-swapped video.</li>
+          </ol>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- STEP 5 -->
+        <div class="tut-section">
+          <h2>Step 5 — Make a Video Call</h2>
+          <ol>
+            <li>Open <strong>WhatsApp Desktop</strong> (or Zoom, Meet, Discord, etc.).</li>
+            <li>Start a video call. When asked for your camera, select <strong>"DroidCam Source"</strong> from the camera dropdown.</li>
+            <li>For audio, select your real microphone — this is routed directly, not through OBS.</li>
+            <li>The other person sees your face-swapped video in real time. Your voice is your real voice.</li>
+          </ol>
+          <div class="tut-highlight">
+            <strong>Tip:</strong> Keep OBS running in the background with <strong>DroidCam Virtual Output active</strong> during the call. If you close OBS, the virtual camera feed stops.
+          </div>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <!-- TROUBLESHOOTING -->
+        <div class="tut-section">
+          <h2>Troubleshooting</h2>
+          <ul>
+            <li><strong>"DroidCam Source" not showing in WhatsApp</strong> — Restart your PC after installing the DroidCam drivers. The virtual camera device needs a reboot to register.</li>
+            <li><strong>Black screen in OBS Browser Source</strong> — Make sure a Chimera Lite session is running and the OBS URL matches: <code id="tut-obs-url-2">http://localhost:7891</code></li>
+            <li><strong>"Tools → DroidCam OBS Virtual Output" missing</strong> — Install <code>DroidCam.OBSVirtualOut.Plugin.0.2.2.exe</code> and restart OBS.</li>
+            <li><strong>Low FPS or laggy video</strong> — Use <strong>Realtime</strong> mode. Ensure your internet upload speed is at least 5 Mbps with &lt;80ms latency to the GPU datacenter.</li>
+            <li><strong>WhatsApp call has no audio</strong> — Audio is separate from OBS. In WhatsApp's call settings, select your real microphone and real speakers/headset.</li>
+          </ul>
+        </div>
+
+        <div class="tut-divider"></div>
+
+        <div class="tut-footer">
+          <p><strong>Chimera Lite</strong> by <strong>Saint H.</strong></p>
+          <p><a href="https://github.com/saintheraldfaust" target="_blank">github.com/saintheraldfaust</a></p>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ INSTRUCTIONS TOUR ═══════════════════════ -->
+
+  <!-- Backdrop: full-screen click-blocker; clicking it exits the tour -->
+  <div id="tour-backdrop"></div>
+
+  <!-- Spotlight: transparent box over the highlighted element; box-shadow dims everything else -->
+  <div id="tour-spotlight"></div>
+
+  <!-- Tour card: floating instruction panel -->
+  <div id="tour-card">
+    <div class="tour-step-meta">Step <span id="tour-step-num">1</span> of <span id="tour-step-total">11</span></div>
+    <div class="tour-card-title" id="tour-title">Welcome</div>
+    <div class="tour-card-body" id="tour-body"></div>
+    <div class="tour-card-nav">
+      <button class="tour-btn-skip" id="tour-btn-skip">Skip tour</button>
+      <div class="tour-nav-right">
+        <button class="tour-btn-prev" id="tour-btn-prev">← Back</button>
+        <button class="tour-btn-next" id="tour-btn-next">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⌘, Settings drawer -->
+  <div id="drawer-scrim"></div>
+  <aside id="settings-drawer">
+    <div class="drawer-head">
+      <span class="drawer-title">Config</span>
+      <button id="drawer-close" class="drawer-x" type="button">✕</button>
+    </div>
+
+    <div class="drawer-sect">
+      <div class="drawer-label">OBS Browser Source port</div>
+      <div class="cf-line">
+        <input id="cfg-obs-port" class="cf-input" type="number" min="1" max="65535" value="7891" />
+        <button id="btn-save-config" class="cf-ghost" type="button">Save</button>
+      </div>
+      <div class="drawer-hint">Add <span class="mono">http://localhost:7891</span> as a Browser Source in OBS.</div>
+    </div>
+
+    <div class="drawer-sect">
+      <div class="drawer-label">Preview adjustments</div>
+      <div class="drawer-slider"><span>Brightness</span><input type="range" id="ctrl-brightness" min="0.7" max="1.4" step="0.05" value="1.00" /><span class="val" id="val-brightness">1.00</span></div>
+      <div class="drawer-slider"><span>Contrast</span><input type="range" id="ctrl-contrast" min="0.7" max="1.5" step="0.05" value="1.00" /><span class="val" id="val-contrast">1.00</span></div>
+      <div class="drawer-slider"><span>Saturation</span><input type="range" id="ctrl-saturation" min="0.6" max="1.6" step="0.05" value="1.00" /><span class="val" id="val-saturation">1.00</span></div>
+      <button id="btn-reset-preview" class="cf-ghost" type="button">Reset preview</button>
+      <div class="drawer-hint">Affects only your local preview, not the feed sent to the GPU.</div>
+    </div>
+
+    <div class="drawer-sect">
+      <div class="drawer-label">Privacy shield</div>
+      <button id="btn-privacy-shield" class="cf-ghost shield-active" type="button">Toggle&nbsp;&nbsp;<span id="shield-tooltip-status">● ON</span></button>
+      <div class="drawer-hint">Auto-hides the video if the connection degrades, so your real face isn't exposed.</div>
+    </div>
+
+    <div class="drawer-sect">
+      <button id="btn-open-tutorial" class="drawer-link" type="button">Setup guide — OBS &amp; virtual camera →</button>
+      <button id="btn-instructions" class="drawer-link" type="button">Instructions tour →</button>
+    </div>
+  </aside>
+
+  <!-- ⌘K Command palette -->
+  <div id="palette-scrim"></div>
+  <div id="command-palette">
+    <input id="palette-input" type="text" placeholder="Type a command…" spellcheck="false" autocomplete="off" autocapitalize="off" />
+    <div id="palette-list"></div>
+    <div id="palette-foot"><span class="mono">↑↓</span> navigate · <span class="mono">↵</span> run · <span class="mono">esc</span> close</div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

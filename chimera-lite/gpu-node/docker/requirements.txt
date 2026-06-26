@@ -1,0 +1,25 @@
+# Heavy runtime dependencies are baked into the GPU image once.
+# Keep this list aligned with bootstrap import checks and inference imports.
+
+# Inference
+# NOTE: insightface pulls in CPU `onnxruntime`, which clobbers `onnxruntime-gpu`
+# and strips CUDAExecutionProvider. The Dockerfile force-reinstalls the GPU build
+# LAST to fix this — keep that step if you touch deps. Pinned for CUDA 12.x / cuDNN 9.
+onnxruntime-gpu==1.20.1
+insightface
+
+# Face enhancement stack
+basicsr
+facexlib
+gfpgan
+realesrgan
+
+# Web server / streaming
+aiohttp
+aiohttp-cors
+
+# Vision / numerics
+opencv-python-headless
+numpy<2
+Pillow
+scipy

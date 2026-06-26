@@ -1,0 +1,80 @@
+{
+  "name": "purplefinger",
+  "version": "1.0.0",
+  "productName": "Purplefinger",
+  "description": "Open-source real-time face-swap client (bring your own GPU node)",
+  "author": "Saint Herald Faust",
+  "license": "AGPL-3.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "node scripts/launch.js",
+    "start:raw": "electron .",
+    "dist": "electron-builder --win nsis",
+    "dist:portable": "electron-builder --win portable",
+    "dist:installer": "electron-builder --win nsis",
+    "dist:mac": "electron-builder --mac",
+    "pack": "electron-builder --win dir"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "ffmpeg-static": "^5.3.0"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.purplefinger.app",
+    "productName": "Purplefinger",
+    "asar": true,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".env.example",
+        "to": ".env.example"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "publisherName": "Saint Herald Faust",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Purplefinger-${version}-Setup.${ext}"
+    },
+    "mac": {
+      "category": "public.app-category.video",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "Purplefinger-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "shortcutName": "Purplefinger",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

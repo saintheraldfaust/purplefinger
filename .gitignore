@@ -1,0 +1,14 @@
+CLAUDE.md
+AGENT.md
+work.md
+RELEASE_NOTES_v1.0.0.md
+.claude/
+**/.env
+**/.session-state.json
+**/node_modules/
+**/dist/
+chimera-lite/voiceimplementation.md
+purplefingerwebsite/
+*.txt
+.DS_Store
+**/.DS_Store
