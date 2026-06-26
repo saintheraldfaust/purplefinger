@@ -47,6 +47,7 @@ STREAM_PROFILES = {
     'hq': {
         'enhance_enabled': True,
         'enhance_every_n': 1,
+        'enhance_async': True,   # GFPGAN runs in a background thread; fast path re-warps it
         'detect_every_n': 1,
         'smooth_alpha': 0.85,
         'stale_face_ttl': 2,
@@ -118,20 +119,22 @@ class FaceSwapPipeline:
 
         enhance_ms = 0
         profile_cfg = STREAM_PROFILES[self.profile]
-        if (
-            profile_cfg['enhance_enabled'] and
-            self.enhance is not None and
-            self.swap._cached_target_faces and
-            self.enhance.ENHANCE_EVERY_N > 0 and
-            self._frame_idx % self.enhance.ENHANCE_EVERY_N == 0
-        ):
-                t1 = time.perf_counter()
+        if profile_cfg['enhance_enabled'] and self.enhance is not None and self.swap._cached_target_faces:
+            t1 = time.perf_counter()
+            if profile_cfg.get('enhance_async'):
+                # Decoupled: GFPGAN refreshes in a background thread; each frame re-warps
+                # the latest restored face onto the live pose (fast). fps tracks the swap.
+                self.enhance.start_async()
+                for face in self.swap._cached_target_faces:
+                    self.enhance.submit(swapped, face)
+                    swapped = self.enhance.apply_cached(swapped, face)
+            elif self.enhance.ENHANCE_EVERY_N > 0 and self._frame_idx % self.enhance.ENHANCE_EVERY_N == 0:
                 for face in self.swap._cached_target_faces:
                     try:
                         swapped = self.enhance.enhance(swapped, face, original_frame=frame)
                     except Exception as e:
                         log.warning('Enhance failed: %s', e)
-                enhance_ms = (time.perf_counter() - t1) * 1000
+            enhance_ms = (time.perf_counter() - t1) * 1000
 
         self._ema_swap = swap_ms if self._ema_swap is None else 0.85 * self._ema_swap + 0.15 * swap_ms
         self._ema_enhance = enhance_ms if self._ema_enhance is None else 0.85 * self._ema_enhance + 0.15 * enhance_ms

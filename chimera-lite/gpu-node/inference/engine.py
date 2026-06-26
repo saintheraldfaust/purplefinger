@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import torch
 import logging
+import threading
 import time
 import os
 from types import SimpleNamespace
@@ -833,6 +834,135 @@ class EnhanceEngine:
         if device == 'cuda':
             log.info('GFPGAN will use torch.autocast fp16.')
         log.info('GFPGAN ready on %s.', device)
+
+        # --- Async (decoupled) enhancement state ---
+        # GFPGAN is heavy (~100-160ms), so running it on every frame caps fps. Instead
+        # a background thread restores the latest swapped face (~few fps) into a cached
+        # aligned 512 crop; the fast per-frame path re-warps that crop onto the LIVE
+        # pose and blends it (~5ms). Detail refreshes continuously; fps tracks the swap.
+        self._async_lock = threading.Lock()
+        self._async_pending = None     # (swapped_copy, kps_copy) queued for the worker
+        self._async_cache = None       # {'aligned': 512x512 enhanced face}
+        self._async_thread = None
+        self._async_stop = False
+
+    # ---------------- Async (decoupled) enhancement ----------------
+
+    def start_async(self):
+        """Start the background restoration worker (idempotent)."""
+        if self._async_thread is None:
+            self._async_stop = False
+            self._async_thread = threading.Thread(target=self._async_worker, daemon=True)
+            self._async_thread.start()
+            log.info('Async GFPGAN worker started')
+
+    def submit(self, swapped, face):
+        """Queue the latest swapped frame + landmarks for background restoration. Stores
+        a reference (swap_frame returns a fresh array each call, never mutated after)."""
+        kps = getattr(face, 'kps', None)
+        if kps is None:
+            return
+        with self._async_lock:
+            self._async_pending = (swapped, np.asarray(kps, dtype=np.float32).copy())
+
+    def _async_worker(self):
+        while not self._async_stop:
+            with self._async_lock:
+                job = self._async_pending
+                self._async_pending = None
+            if job is None:
+                time.sleep(0.004)
+                continue
+            swapped, kps = job
+            try:
+                aligned_enh = self._compute_aligned_enhanced(swapped, kps)
+            except Exception as e:
+                log.warning('Async enhance failed: %s', e)
+                continue
+            if aligned_enh is not None:
+                with self._async_lock:
+                    self._async_cache = {'aligned': aligned_enh}
+
+    def _compute_aligned_enhanced(self, swapped, kps):
+        """Run GFPGAN on the aligned 512 crop; return the restored 512 face (or None)."""
+        from insightface.utils.face_align import estimate_norm
+        _r = estimate_norm(kps, 512, mode='arcface')
+        M = _r[0] if isinstance(_r, tuple) else _r
+        if M is None:
+            return None
+        M = np.asarray(M, dtype=np.float32)
+        if M.shape != (2, 3):
+            return None
+        aligned = cv2.warpAffine(swapped, M, (512, 512), flags=cv2.INTER_LINEAR)
+        with torch.inference_mode(), torch.autocast(device_type='cuda', enabled=(self._device == 'cuda')):
+            _, restored_faces, _ = self.gfpgan.enhance(
+                aligned, has_aligned=True, only_center_face=True,
+                paste_back=False, weight=self.WEIGHT,
+            )
+        if not restored_faces:
+            return None
+        enh = restored_faces[0]
+        if enh is None or enh.size == 0:
+            return None
+        if enh.dtype != np.uint8:
+            enh = np.clip(enh, 0, 255).astype(np.uint8)
+        return enh
+
+    def apply_cached(self, swapped, face):
+        """FAST per-frame path: warp the cached restored face onto the LIVE pose and
+        blend it. Returns the swap unchanged until the first restoration is ready."""
+        with self._async_lock:
+            cache = self._async_cache
+        if cache is None:
+            return swapped
+        kps = getattr(face, 'kps', None)
+        if kps is None:
+            return swapped
+        try:
+            from insightface.utils.face_align import estimate_norm
+            _r = estimate_norm(np.asarray(kps, dtype=np.float32), 512, mode='arcface')
+            M = _r[0] if isinstance(_r, tuple) else _r
+            if M is None:
+                return swapped
+            M = np.asarray(M, dtype=np.float32)
+            if M.shape != (2, 3):
+                return swapped
+            h, w = swapped.shape[:2]
+            M_inv = cv2.invertAffineTransform(M)
+            restored = cv2.warpAffine(cache['aligned'], M_inv, (w, h), flags=cv2.INTER_LINEAR)
+            mask = self._build_enh_mask(face, h, w)
+            valid = (restored.sum(axis=2) > 0).astype(np.float32)
+            mask = (mask * valid)[:, :, np.newaxis]
+            return (restored.astype(np.float32) * mask + swapped.astype(np.float32) * (1.0 - mask)).astype(np.uint8)
+        except Exception as e:
+            log.warning('apply_cached failed: %s', e)
+            return swapped
+
+    def _build_enh_mask(self, face, h, w):
+        """Feathered face mask: strong on stable regions (cheeks/forehead/nose), WEAK on
+        mouth + eyes so the live swap shows the current expression there (no ghosting)."""
+        mask = np.zeros((h, w), dtype=np.float32)
+        lmk = getattr(face, 'landmark_2d_106', None)
+        if lmk is not None and len(lmk) >= 33:
+            cv2.fillConvexPoly(mask, cv2.convexHull(lmk[:33].astype(np.int32)), 1.0)
+        else:
+            x1, y1, x2, y2 = np.asarray(face.bbox, dtype=np.int32)
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            cv2.ellipse(mask, (cx, cy), (max(1, (x2 - x1) // 2), max(1, (y2 - y1) // 2)), 0, 0, 360, 1.0, -1)
+
+        kps = getattr(face, 'kps', None)
+        if kps is not None and len(kps) >= 5:
+            bw = max(1.0, float(face.bbox[2] - face.bbox[0]))
+            for idx in (0, 1):                                  # eyes
+                ex, ey = np.asarray(kps[idx], dtype=np.float32)
+                cv2.circle(mask, (int(ex), int(ey)), max(3, int(bw * 0.13)), 0.0, -1)
+            ml = np.asarray(kps[3], dtype=np.float32)
+            mr = np.asarray(kps[4], dtype=np.float32)            # mouth
+            mcx, mcy = int((ml[0] + mr[0]) * 0.5), int((ml[1] + mr[1]) * 0.5)
+            mw = max(4.0, float(np.linalg.norm(mr - ml)))
+            cv2.ellipse(mask, (mcx, mcy), (int(mw * 0.7), int(mw * 0.45)), 0, 0, 360, 0.0, -1)
+
+        return cv2.GaussianBlur(mask, (0, 0), 9.0)
 
     def enhance(self, frame: np.ndarray, face, original_frame: np.ndarray = None) -> np.ndarray:
         try:
