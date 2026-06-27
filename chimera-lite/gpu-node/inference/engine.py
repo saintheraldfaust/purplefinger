@@ -13,6 +13,11 @@ import time
 import os
 from types import SimpleNamespace
 
+# Compile basicsr/GFPGAN's custom CUDA ops (upfirdn2d, fused_act) for Blackwell (sm_120)
+# at JIT time. Without this they silently fall back to a 2-3x slower pure-PyTorch path on
+# the 5090 — the cause of GFPGAN swinging 65↔150ms. Must be set before GFPGAN first runs.
+os.environ.setdefault('TORCH_CUDA_ARCH_LIST', '12.0')
+
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True  # speed up conv ops after first frame
     torch.backends.cuda.matmul.allow_tf32 = True   # TF32 matmuls — big speedup, imperceptible quality cost
@@ -981,6 +986,17 @@ class EnhanceEngine:
         if device == 'cuda':
             log.info('GFPGAN will use torch.autocast fp16.')
         log.info('GFPGAN ready on %s.', device)
+
+        # Probe: are basicsr's fast CUDA ops loaded, or the slow pure-PyTorch fallback?
+        # False => the 5090 is running GFPGAN on the slow path (needs nvcc / a rebuild).
+        try:
+            import basicsr.ops.fused_act as _fa
+            import basicsr.ops.upfirdn2d as _uf
+            log.info('basicsr CUDA ops loaded -> fused_act=%s upfirdn2d=%s (False = slow fallback path)',
+                     getattr(_fa, 'fused_act_ext', None) is not None,
+                     getattr(_uf, 'upfirdn2d_ext', None) is not None)
+        except Exception as _e:
+            log.info('basicsr ops probe failed: %s', _e)
 
     def enhance(self, frame: np.ndarray, face, original_frame: np.ndarray = None) -> np.ndarray:
         try:
