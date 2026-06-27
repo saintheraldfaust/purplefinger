@@ -18,6 +18,11 @@ from types import SimpleNamespace
 # the 5090 — the cause of GFPGAN swinging 65↔150ms. Must be set before GFPGAN first runs.
 os.environ.setdefault('TORCH_CUDA_ARCH_LIST', '12.0')
 
+# Cap OpenCV's internal threads. On a 32-core box it spawns a thread per core for every
+# tiny per-frame op (blur/warp/cvtColor on a 512px crop) — the spawn overhead dominates,
+# pegging CPU at 100% while the GPU idles. A few threads is faster for these small images.
+cv2.setNumThreads(4)
+
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True  # speed up conv ops after first frame
     torch.backends.cuda.matmul.allow_tf32 = True   # TF32 matmuls — big speedup, imperceptible quality cost

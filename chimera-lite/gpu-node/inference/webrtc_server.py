@@ -23,6 +23,12 @@ import numpy as np
 from aiohttp import web, WSMsgType
 import aiohttp_cors
 
+try:
+    from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
+    _HAVE_AIORTC = True
+except Exception:
+    _HAVE_AIORTC = False
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pipeline import FaceSwapPipeline, PipelineConfig
 
@@ -258,7 +264,75 @@ async def handle_stats(request):
 async def handle_health(request):
     if _init_error or pipeline is None:
         return web.json_response({'ok': False, 'gpu': False, 'error': _init_error or 'Pipeline not initialised'})
-    return web.json_response({'ok': True, 'gpu': True, 'face_set': pipeline.ready, 'profile': pipeline.profile})
+    return web.json_response({'ok': True, 'gpu': True, 'face_set': pipeline.ready,
+                              'profile': pipeline.profile, 'webrtc': _HAVE_AIORTC})
+
+
+# --- WebRTC data-channel transport (UDP — robust on high-RTT / lossy / mobile links) ---
+_rtc_pcs = set()
+
+
+async def handle_offer(request):
+    """Client opens a datachannel and sends JPEG frames over it; we run the SAME pipeline
+    and send swapped JPEG back. Same single-slot 'newest wins' processing as the WS path."""
+    if not _HAVE_AIORTC:
+        return web.json_response({'error': 'WebRTC not built on this node'}, status=501)
+    if pipeline is None:
+        return web.json_response({'error': 'Pipeline not initialised'}, status=503)
+
+    params = await request.json()
+    config = RTCConfiguration(iceServers=[RTCIceServer(urls=['stun:stun.l.google.com:19302'])])
+    pc = RTCPeerConnection(configuration=config)
+    _rtc_pcs.add(pc)
+    log.info('WebRTC offer from %s', request.remote)
+
+    @pc.on('connectionstatechange')
+    async def _on_state():
+        log.info('WebRTC connection state: %s', pc.connectionState)
+        if pc.connectionState in ('failed', 'closed', 'disconnected'):
+            await pc.close()
+            _rtc_pcs.discard(pc)
+
+    @pc.on('datachannel')
+    def _on_datachannel(channel):
+        latest = [None]
+        ev = asyncio.Event()
+
+        async def _proc_loop():
+            while True:
+                await ev.wait()
+                ev.clear()
+                raw = latest[0]
+                latest[0] = None
+                if raw is None:
+                    continue
+                try:
+                    buf, _ms = await asyncio.to_thread(_full_pipeline, raw)
+                except Exception as e:
+                    log.warning('WebRTC frame error: %s', e)
+                    continue
+                if buf and channel.readyState == 'open':
+                    try:
+                        channel.send(buf)
+                    except Exception:
+                        break
+
+        task = asyncio.ensure_future(_proc_loop())
+
+        @channel.on('message')
+        def _on_message(message):
+            if isinstance(message, (bytes, bytearray)):
+                latest[0] = bytes(message)   # newest frame wins
+                ev.set()
+
+        @channel.on('close')
+        def _on_close():
+            task.cancel()
+
+    await pc.setRemoteDescription(RTCSessionDescription(sdp=params['sdp'], type=params['type']))
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    return web.json_response({'sdp': pc.localDescription.sdp, 'type': pc.localDescription.type})
 
 
 # --- App setup ---
@@ -275,6 +349,8 @@ def build_app():
     cors.add(app.router.add_get('/health', handle_health))
     cors.add(app.router.add_get('/stats', handle_stats))
     cors.add(app.router.add_post('/set-swapper', handle_set_swapper))
+    if _HAVE_AIORTC:
+        cors.add(app.router.add_post('/offer', handle_offer))
 
     return app
 

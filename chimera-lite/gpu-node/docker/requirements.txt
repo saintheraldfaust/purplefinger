@@ -17,6 +17,8 @@ realesrgan
 # Web server / streaming
 aiohttp
 aiohttp-cors
+# WebRTC transport (UDP) — robust on high-RTT / lossy / mobile links where TCP-WS chokes.
+aiortc
 
 # Vision / numerics
 opencv-python-headless
