@@ -1761,7 +1761,7 @@ async function _captureLoop() {
         const blob = await offscreen.convertToBlob({ type: 'image/jpeg', quality: currentSendQuality });
         sentFrames++;
         lastSentAt = Date.now();
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(blob);
+        sendFrame(blob);
       } catch (_) { /* ignore */ }
     }
 
@@ -2058,6 +2058,7 @@ async function doReconnect() {
   stopStats();
   stopAudioMeter();
   if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+  if (pc) { try { pc.close(); } catch (_) {} pc = null; dc = null; }
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
   if (captureVideo) { captureVideo.srcObject = null; captureVideo = null; }
   localVideo.srcObject = null;
@@ -2314,6 +2315,8 @@ async function enumerateCameras() {
 
 // --- WebSocket stream state ---
 let ws           = null;
+let pc           = null;   // WebRTC peer connection
+let dc           = null;   // WebRTC data channel (frames)
 let localStream  = null;
 let captureVideo = null;  // hidden <video> to draw from
 let captureTimer = null;  // unused but kept to avoid reference errors in restartCaptureTimer
@@ -2369,14 +2372,21 @@ async function startStreaming(ip, port) {
   remoteCanvas.height = 360;
   const displayCtx = remoteCanvas.getContext('2d');
 
-  const _hsWs = hsStep('handshake · /ws');
-  ws = new WebSocket(`ws://${ip}:${port}/ws`);
-  ws.binaryType = 'arraybuffer';
+  const _hsWs = hsStep('handshake · transport');
 
-  ws.onopen = () => {
+  // Shared receive: decode swapped JPEG -> display + OBS (used by both WS and WebRTC).
+  const onSwapped = (data) => {
+    recvFrames++;
+    createImageBitmap(new Blob([data], { type: 'image/jpeg' })).then((bitmap) => {
+      displayCtx.drawImage(bitmap, 0, 0, remoteCanvas.width, remoteCanvas.height);
+      bitmap.close();
+    }).catch(() => {});
+    window.chimera.obsFrame(data);
+  };
+  const onLive = (label) => {
     hsDone(_hsWs);
-    hsLive('stream live');
-    document.body.dataset.status = 'live';   // canvas-first: dissolve console, feed fullbleed
+    hsLive(label);
+    document.body.dataset.status = 'live';
     stopBeeping();
     hideVideoEmpty();
     setLog(`Streaming — ${ip}:${port}`);
@@ -2387,19 +2397,28 @@ async function startStreaming(ip, port) {
     applyFaceToGpu().catch(() => {});   // push the cached source face to the node
   };
 
-  ws.onmessage = (event) => {
-    recvFrames++;
-    // Display in the Electron window — event.data is already ArrayBuffer
-    createImageBitmap(new Blob([event.data], { type: 'image/jpeg' })).then((bitmap) => {
-      displayCtx.drawImage(bitmap, 0, 0, remoteCanvas.width, remoteCanvas.height);
-      bitmap.close();
-    });
+  // Prefer WebRTC (UDP data channel) when the node supports it — far better on
+  // high-RTT / lossy / mobile links than TCP-WebSocket. Fall back to WS on any failure.
+  let webrtcOk = false;
+  try {
+    const h = await fetch(`http://${ip}:${port}/health`, { signal: AbortSignal.timeout(4000) }).then(r => r.json());
+    webrtcOk = !!h.webrtc;
+  } catch (_) {}
 
-    // Push to OBS Browser Source — send raw ArrayBuffer, main process base64-encodes it.
-    // Eliminates the async FileReader + dataURL string overhead on the render process.
-    window.chimera.obsFrame(event.data);
-  };
+  if (webrtcOk) {
+    try {
+      await connectWebRTC(ip, port, onSwapped, onLive);
+      return;
+    } catch (err) {
+      setLog('WebRTC failed, using WebSocket: ' + (err?.message || err));
+      if (pc) { try { pc.close(); } catch (_) {} pc = null; dc = null; }
+    }
+  }
 
+  ws = new WebSocket(`ws://${ip}:${port}/ws`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => onLive('stream live');
+  ws.onmessage = (event) => onSwapped(event.data);
   ws.onerror = () => {
     setLog('Stream error — check GPU pod');
     showReconnectBanner('Stream error — tap to reconnect');
@@ -2410,6 +2429,54 @@ async function startStreaming(ip, port) {
       showReconnectBanner('Stream disconnected — tap to reconnect');
     }
   };
+}
+
+// WebRTC data-channel connect: unreliable + unordered (drops late frames instead of
+// stalling — the key advantage over TCP on a bad link). Non-trickle ICE -> one POST.
+async function connectWebRTC(ip, port, onSwapped, onLive) {
+  pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  dc = pc.createDataChannel('frames', { ordered: false, maxRetransmits: 0 });
+  dc.binaryType = 'arraybuffer';
+  dc.onopen = () => onLive('stream live · webrtc');
+  dc.onmessage = (e) => onSwapped(e.data);
+  dc.onclose = () => { if (gpuIp) showReconnectBanner('Stream disconnected — tap to reconnect'); };
+  pc.onconnectionstatechange = () => {
+    if (['failed', 'disconnected'].includes(pc.connectionState) && gpuIp) {
+      showReconnectBanner('Stream error — tap to reconnect');
+    }
+  };
+  await pc.setLocalDescription(await pc.createOffer());
+  await waitIceComplete(pc);
+  const answer = await fetch(`http://${ip}:${port}/offer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+    signal: AbortSignal.timeout(15000),
+  }).then(r => r.json());
+  await pc.setRemoteDescription(answer);
+}
+
+function waitIceComplete(peer) {
+  if (peer.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    const onChange = () => {
+      if (peer.iceGatheringState === 'complete') {
+        peer.removeEventListener('icegatheringstatechange', onChange);
+        resolve();
+      }
+    };
+    peer.addEventListener('icegatheringstatechange', onChange);
+    setTimeout(resolve, 3000);   // fallback: proceed with whatever candidates we have
+  });
+}
+
+function sendFrame(blob) {
+  if (dc && dc.readyState === 'open') {
+    if (dc.bufferedAmount > 800000) return;   // backed up -> drop, keep latency low
+    blob.arrayBuffer().then((buf) => { try { dc.send(buf); } catch (_) {} });
+  } else if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(blob);
+  }
 }
 
 function stopStreaming() {
@@ -2431,6 +2498,7 @@ function stopStreaming() {
   if (_recMediaRecorder && _recMediaRecorder.state === 'recording') _recStop();
 
   if (ws) { ws.close(); ws = null; }
+  if (pc) { try { pc.close(); } catch (_) {} pc = null; dc = null; }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
   if (captureVideo) { captureVideo.srcObject = null; captureVideo = null; }
 
