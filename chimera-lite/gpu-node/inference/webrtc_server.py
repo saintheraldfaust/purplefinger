@@ -265,11 +265,28 @@ async def handle_health(request):
     if _init_error or pipeline is None:
         return web.json_response({'ok': False, 'gpu': False, 'error': _init_error or 'Pipeline not initialised'})
     return web.json_response({'ok': True, 'gpu': True, 'face_set': pipeline.ready,
-                              'profile': pipeline.profile, 'webrtc': _HAVE_AIORTC})
+                              'profile': pipeline.profile, 'webrtc': _HAVE_AIORTC,
+                              'ice_servers': _ice_servers_dicts()})
 
 
 # --- WebRTC data-channel transport (UDP — robust on high-RTT / lossy / mobile links) ---
 _rtc_pcs = set()
+
+
+def _ice_servers_dicts():
+    """ICE servers as plain dicts. STUN alone can't traverse RunPod's symmetric NAT, so
+    a TURN relay is required — configured via env (TURN_URL/TURN_USER/TURN_PASS) so it's a
+    pod-config change, not a rebuild. The same list is handed to the client via /health."""
+    servers = [{'urls': ['stun:stun.l.google.com:19302']}]
+    turn = os.environ.get('TURN_URL')
+    if turn:
+        s = {'urls': [turn]}
+        if os.environ.get('TURN_USER'):
+            s['username'] = os.environ['TURN_USER']
+        if os.environ.get('TURN_PASS'):
+            s['credential'] = os.environ['TURN_PASS']
+        servers.append(s)
+    return servers
 
 
 async def handle_offer(request):
@@ -281,7 +298,7 @@ async def handle_offer(request):
         return web.json_response({'error': 'Pipeline not initialised'}, status=503)
 
     params = await request.json()
-    config = RTCConfiguration(iceServers=[RTCIceServer(urls=['stun:stun.l.google.com:19302'])])
+    config = RTCConfiguration(iceServers=[RTCIceServer(**s) for s in _ice_servers_dicts()])
     pc = RTCPeerConnection(configuration=config)
     _rtc_pcs.add(pc)
     log.info('WebRTC offer from %s', request.remote)

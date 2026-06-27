@@ -2399,15 +2399,16 @@ async function startStreaming(ip, port) {
 
   // Prefer WebRTC (UDP data channel) when the node supports it — far better on
   // high-RTT / lossy / mobile links than TCP-WebSocket. Fall back to WS on any failure.
-  let webrtcOk = false;
+  let webrtcOk = false, iceServers = null;
   try {
     const h = await fetch(`http://${ip}:${port}/health`, { signal: AbortSignal.timeout(4000) }).then(r => r.json());
     webrtcOk = !!h.webrtc;
+    iceServers = h.ice_servers || null;
   } catch (_) {}
 
   if (webrtcOk) {
     try {
-      await connectWebRTC(ip, port, onSwapped, onLive);
+      await connectWebRTC(ip, port, onSwapped, onLive, iceServers);
       return;
     } catch (err) {
       setLog('WebRTC failed, using WebSocket: ' + (err?.message || err));
@@ -2433,8 +2434,8 @@ async function startStreaming(ip, port) {
 
 // WebRTC data-channel connect: unreliable + unordered (drops late frames instead of
 // stalling — the key advantage over TCP on a bad link). Non-trickle ICE -> one POST.
-async function connectWebRTC(ip, port, onSwapped, onLive) {
-  pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+async function connectWebRTC(ip, port, onSwapped, onLive, iceServers) {
+  pc = new RTCPeerConnection({ iceServers: iceServers || [{ urls: 'stun:stun.l.google.com:19302' }] });
   dc = pc.createDataChannel('frames', { ordered: false, maxRetransmits: 0 });
   dc.binaryType = 'arraybuffer';
   dc.onopen = () => onLive('stream live · webrtc');
