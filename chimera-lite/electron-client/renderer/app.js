@@ -1446,12 +1446,12 @@ const LIGHT_GRACE_MS          = 3000; // ms after unblock before re-blocking is 
 const STREAM_PROFILES = {
   realtime: {
     label: 'Realtime',
-    sendFps: 20,
+    sendFps: 24,
     minFps: 6,
-    headroom: 2,
-    quality: 0.65,
-    width: 512,
-    height: 288,
+    headroom: 3,
+    quality: 0.5,
+    width: 384,
+    height: 216,
     summary: 'Realtime mode prioritizes steadier motion with lighter detection cadence, mild low-light compensation, and no enhancement overhead.',
   },
   quality: {
