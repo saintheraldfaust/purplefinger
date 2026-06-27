@@ -32,19 +32,45 @@ WARP_TEMPLATES = {
                              [0.61507734, 0.72034453]], dtype=np.float32),
 }
 
+_FF = 'https://github.com/facefusion/facefusion-assets/releases/download'
 HIRES_SPECS = {
-    # key -> model filename + alignment template + input/output normalization
+    # key -> model filename + url + alignment template + input/output normalization
     'hyperswap': {
-        'file': 'hyperswap_1a_256.onnx', 'template': 'arcface_128', 'size': 256,
+        'file': 'hyperswap_1a_256.onnx', 'url': f'{_FF}/models-3.3.0/hyperswap_1a_256.onnx',
+        'template': 'arcface_128', 'size': 256,
         'mean': np.array([0.5, 0.5, 0.5], np.float32), 'std': np.array([0.5, 0.5, 0.5], np.float32),
         'embed': 'normed',          # uses the L2-normalized arcface embedding directly
     },
     'ghost': {
-        'file': 'ghost_2_256.onnx', 'template': 'arcface_112_v1', 'size': 256,
+        'file': 'ghost_2_256.onnx', 'url': f'{_FF}/models-3.0.0/ghost_2_256.onnx',
+        'template': 'arcface_112_v1', 'size': 256,
         'mean': np.array([0.5, 0.5, 0.5], np.float32), 'std': np.array([0.5, 0.5, 0.5], np.float32),
         'embed': 'crossface',       # raw embedding -> crossface_ghost.onnx -> normalize
     },
 }
+CROSSFACE_GHOST_URL = f'{_FF}/models-3.4.0/crossface_ghost.onnx'
+
+
+def _ensure_model_file(path, url):
+    """Download a model to `path` if it's missing/empty. Returns True if present."""
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        return True
+    try:
+        import urllib.request
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        log.info('Downloading %s ...', os.path.basename(path))
+        tmp = path + '.part'
+        urllib.request.urlretrieve(url, tmp)
+        os.replace(tmp, path)
+        log.info('Downloaded %s (%.0f MB)', os.path.basename(path), os.path.getsize(path) / 1e6)
+        return True
+    except Exception as e:
+        log.warning('Failed to download %s: %s', os.path.basename(path), e)
+        try:
+            os.remove(path + '.part')
+        except OSError:
+            pass
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -165,12 +191,14 @@ class SwapEngine:
         self._load_hires_swappers(_gpu_providers)
 
     def _load_hires_swappers(self, providers):
-        """Load hyperswap/ghost (+ ghost's crossface embedding converter) if present."""
+        """Download (if missing) + load hyperswap/ghost (+ ghost's crossface converter).
+        Models are fetched here rather than in bootstrap.sh, which is baked into the
+        image — so a normal git-pull pod restart picks up new models, no rebuild."""
         import onnxruntime as ort
         for key, spec in HIRES_SPECS.items():
             path = os.path.join('models', spec['file'])
-            if not os.path.exists(path):
-                log.info('Hi-res swapper %s not present (%s) — skipping', key, path)
+            if not _ensure_model_file(path, spec['url']):
+                log.info('Hi-res swapper %s unavailable — skipping', key)
                 continue
             try:
                 sess = ort.InferenceSession(path, providers=providers)
@@ -185,12 +213,16 @@ class SwapEngine:
         # ghost needs the crossface embedding converter
         if 'ghost' in self._hires:
             cpath = os.path.join('models', 'crossface_ghost.onnx')
-            try:
-                sess = ort.InferenceSession(cpath, providers=providers)
-                self._hires['crossface'] = {'session': sess, 'in': sess.get_inputs()[0].name}
-                log.info('Loaded crossface_ghost converter')
-            except Exception as e:
-                log.warning('crossface_ghost missing/failed (%s) — dropping ghost', e)
+            if _ensure_model_file(cpath, CROSSFACE_GHOST_URL):
+                try:
+                    sess = ort.InferenceSession(cpath, providers=providers)
+                    self._hires['crossface'] = {'session': sess, 'in': sess.get_inputs()[0].name}
+                    log.info('Loaded crossface_ghost converter')
+                except Exception as e:
+                    log.warning('crossface_ghost failed (%s) — dropping ghost', e)
+                    self._hires.pop('ghost', None)
+            else:
+                log.warning('crossface_ghost unavailable — dropping ghost')
                 self._hires.pop('ghost', None)
 
     def available_swappers(self):
