@@ -7,8 +7,19 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
-    wget git \
+    wget git gnupg \
     && rm -rf /var/lib/apt/lists/*
+
+# nvcc + CUDA dev headers so basicsr/GFPGAN can JIT-compile their custom ops
+# (upfirdn2d, fused_act) for Blackwell (sm_120). Without nvcc they fall back to a
+# ~3x slower pure-PyTorch path — the cause of GFPGAN running ~170ms instead of ~55ms.
+RUN wget -qO /tmp/cuda-keyring.deb \
+      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
+    dpkg -i /tmp/cuda-keyring.deb && apt-get update && \
+    apt-get install -y --no-install-recommends cuda-nvcc-12-8 cuda-cudart-dev-12-8 && \
+    rm -rf /var/lib/apt/lists/* /tmp/cuda-keyring.deb
+ENV CUDA_HOME=/usr/local/cuda-12.8
+ENV PATH=/usr/local/cuda-12.8/bin:${PATH}
 
 WORKDIR /opt/chimera
 
