@@ -37,15 +37,16 @@ STREAM_PROFILES = {
         # link; q65 roughly halves downlink bytes vs q85 with little visible loss.
         'jpeg_quality': 65,
     },
+    # 'Balanced' in the UI: GFPGAN every 4th frame (crisper than Fast, ~2-3x the fps of HQ).
     'quality': {
         'enhance_enabled': True,
         'enhance_every_n': 4,
-        'detect_every_n': 1,
-        'smooth_alpha': 0.75,
-        'stale_face_ttl': 1,
+        'detect_every_n': 2,   # tracker coasts the gap (matches realtime)
+        'smooth_alpha': 0.85,
+        'stale_face_ttl': 2,
         'proc_w': 480,
         'proc_h': 270,
-        'jpeg_quality': 85,
+        'jpeg_quality': 72,    # downlink is emitted at proc res now — trim bytes
     },
     # Live-call high quality: GFPGAN restoration EVERY frame (no pulsing) at higher
     # res — crisps the soft 128px swap. Heavier per frame; TensorRT recovers the fps.
