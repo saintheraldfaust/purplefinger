@@ -113,6 +113,13 @@ class FaceSwapPipeline:
     def set_swapper(self, swapper_type):
         return self.swap.set_swapper(swapper_type)
 
+    def set_tone_strength(self, strength):
+        self.swap.set_tone_strength(strength)
+
+    @property
+    def tone_strength(self):
+        return getattr(self.swap, '_tone_strength', 1.0)
+
     def get_runtime_settings(self):
         return STREAM_PROFILES[self.profile].copy()
 

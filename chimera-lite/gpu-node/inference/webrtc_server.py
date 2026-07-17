@@ -361,6 +361,18 @@ async def handle_set_swapper(request):
     return web.json_response({'ok': True, 'swapper': applied})
 
 
+async def handle_set_tone(request):
+    if pipeline is None:
+        return web.json_response({'error': 'Pipeline not initialised'}, status=503)
+    try:
+        data = await request.json()
+        strength = float(data.get('strength'))
+    except Exception:
+        return web.json_response({'error': 'Invalid strength'}, status=400)
+    pipeline.set_tone_strength(strength)
+    return web.json_response({'ok': True, 'tone_strength': pipeline.tone_strength})
+
+
 # --- Stats (rolling timings, so tuning doesn't require log scraping) ---
 async def handle_stats(request):
     if pipeline is None:
@@ -368,6 +380,7 @@ async def handle_stats(request):
     s = pipeline.get_stats()
     s['out_fps'] = round(_last_out_fps, 1)
     s['face_set'] = pipeline.ready
+    s['tone_strength'] = pipeline.tone_strength
     return web.json_response(s)
 
 
@@ -532,6 +545,7 @@ def build_app():
     cors.add(app.router.add_get('/health', handle_health))
     cors.add(app.router.add_get('/stats', handle_stats))
     cors.add(app.router.add_post('/set-swapper', handle_set_swapper))
+    cors.add(app.router.add_post('/set-tone', handle_set_tone))
     if _HAVE_AIORTC:
         cors.add(app.router.add_post('/offer', handle_offer))
 

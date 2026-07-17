@@ -192,6 +192,7 @@ class SwapEngine:
         self._source_skin_zone_stats = None
         self._source_vertical_stat_map_cache = {}
         self._blend_asset_cache = {}
+        self._tone_strength = 1.0   # 0=raw swap (no complexion transfer) .. 1=full match
         self._profile_counter = 0
 
         # Higher-res swappers (hyperswap/ghost) — loaded if their model files exist.
@@ -795,8 +796,16 @@ class SwapEngine:
         falloff = cv2.GaussianBlur(falloff.astype(np.float32), (31, 31), 6.0)
         return np.clip(falloff, 0.0, 1.0)
 
+    def set_tone_strength(self, strength: float):
+        """0 = raw swap (no complexion transfer), 1 = full match. Lets the user dial back
+        the tone match when it over-whitens a dark face (a lighter patch over the neck)."""
+        self._tone_strength = float(np.clip(strength, 0.0, 1.0))
+        self._blend_asset_cache.clear()
+        log.info('Tone match strength set: %.2f', self._tone_strength)
+
     def _match_face_tone(self, swapped, face, blend_assets):
-        if self._source_face is None or self._source_img is None or self._source_skin_stats is None:
+        if (self._source_face is None or self._source_img is None
+                or self._source_skin_stats is None or self._tone_strength <= 0.001):
             return swapped
 
         target_mask = blend_assets['tone_mask']
@@ -860,7 +869,8 @@ class SwapEngine:
             adjusted_lab[:, :, ch] = np.clip(swapped_lab[:, :, ch] + delta, 0.0, 255.0)
 
         adjusted_roi = cv2.cvtColor(adjusted_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        soft = tone_soft[fy1:fy2, fx1:fx2]
+        # Scale the spatial falloff by the user's strength: 0 => soft=0 => no change.
+        soft = tone_soft[fy1:fy2, fx1:fx2] * self._tone_strength
 
         out = swapped.copy()
         out[fy1:fy2, fx1:fx2] = (
