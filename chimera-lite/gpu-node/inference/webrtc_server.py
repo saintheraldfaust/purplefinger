@@ -103,9 +103,11 @@ def _full_pipeline(raw_bytes: bytes):
 
 
 def _process_bgr(img):
-    """resize → GPU swap → resize back → JPEG encode. Shared by the JPEG-uplink path
+    """resize → GPU swap → JPEG encode at proc res. Shared by the JPEG-uplink path
     (_full_pipeline, after cv2.imdecode) and the H.264-uplink path (after PyAV decode →
-    to_ndarray('bgr24')). Returns (jpeg_bytes, frame_ms) or (None, 0)."""
+    to_ndarray('bgr24')). The downlink JPEG is emitted at proc res — NOT the input res —
+    so an H.264 uplink at camera size (640x360) doesn't inflate the downlink; the client
+    scales it on its display canvas. Returns (jpeg_bytes, frame_ms) or (None, 0)."""
     if pipeline is None or img is None:
         return None, 0.0
 
@@ -119,11 +121,8 @@ def _process_bgr(img):
         if (orig_w != proc_w or orig_h != proc_h) else img
 
     t0 = time.perf_counter()
-    swapped = pipeline.process_frame(small)
+    out = pipeline.process_frame(small)   # swapped, at proc res — encode directly
     frame_ms = (time.perf_counter() - t0) * 1000
-
-    out = cv2.resize(swapped, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR) \
-        if (orig_w != proc_w or orig_h != proc_h) else swapped
 
     jpeg_params = _jpeg_params_cache.get(jpeg_quality)
     if jpeg_params is None:
@@ -241,6 +240,7 @@ async def handle_ws_h264(request):
     ctx = av.CodecContext.create('h264', 'r')
     latest = [None]                 # newest decoded BGR frame (newest-wins)
     frame_event = asyncio.Event()
+    stats = {'msgs': 0, 'decoded': 0, 'out': 0, 't0': time.perf_counter()}
 
     def _decode_latest(data):
         """Decode one access unit; return the newest BGR ndarray or None. Runs in a thread."""
@@ -270,6 +270,11 @@ async def handle_ws_h264(request):
                 continue
             if buf is None:
                 continue
+            stats['out'] += 1
+            if stats['out'] % 30 == 0:
+                dt = max(time.perf_counter() - stats['t0'], 1e-6)
+                log.info('H264 out FPS=%.1f  msgs=%d decoded=%d out=%d',
+                         stats['out'] / dt, stats['msgs'], stats['decoded'], stats['out'])
             try:
                 await ws.send_bytes(buf)
             except Exception:
@@ -279,9 +284,13 @@ async def handle_ws_h264(request):
     try:
         async for msg in ws:
             if msg.type == WSMsgType.BINARY:
+                stats['msgs'] += 1
                 # Decode in arrival order (sequential await keeps the ctx single-threaded).
                 bgr = await asyncio.to_thread(_decode_latest, msg.data)
+                if stats['msgs'] == 1:
+                    log.info('H264 first message received (%d bytes)', len(msg.data))
                 if bgr is not None:
+                    stats['decoded'] += 1
                     latest[0] = bgr
                     frame_event.set()
             elif msg.type == WSMsgType.ERROR:
