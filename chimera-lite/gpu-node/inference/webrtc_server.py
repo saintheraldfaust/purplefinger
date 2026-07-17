@@ -29,6 +29,17 @@ try:
 except Exception:
     _HAVE_AIORTC = False
 
+# PyAV (ships with aiortc) gives us an H.264 decoder for the WebCodecs uplink: the client
+# encodes the webcam as H.264 (inter-frame compression → ~5-10x fewer bytes than per-frame
+# JPEG), streams it over /ws-h264, and we decode → swap → JPEG back. Inert if av is absent.
+try:
+    import av
+    import av.error
+    _HAVE_H264 = 'h264' in av.codecs_available
+except Exception:
+    av = None
+    _HAVE_H264 = False
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pipeline import FaceSwapPipeline, PipelineConfig
 
@@ -78,7 +89,7 @@ _jpeg_params_cache: dict = {}
 def _full_pipeline(raw_bytes: bytes):
     """
     Runs entirely off the event loop (called via asyncio.to_thread).
-    decode → resize → GPU swap → resize → JPEG encode
+    JPEG-decode → resize → GPU swap → resize → JPEG encode
     Returns (buf_bytes, frame_ms) or (None, 0) on failure.
     """
     if pipeline is None:
@@ -87,6 +98,15 @@ def _full_pipeline(raw_bytes: bytes):
     arr = np.frombuffer(raw_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
+        return None, 0.0
+    return _process_bgr(img)
+
+
+def _process_bgr(img):
+    """resize → GPU swap → resize back → JPEG encode. Shared by the JPEG-uplink path
+    (_full_pipeline, after cv2.imdecode) and the H.264-uplink path (after PyAV decode →
+    to_ndarray('bgr24')). Returns (jpeg_bytes, frame_ms) or (None, 0)."""
+    if pipeline is None or img is None:
         return None, 0.0
 
     runtime = pipeline.get_runtime_settings()
@@ -198,6 +218,86 @@ async def handle_ws(request):
     return ws
 
 
+# --- H.264 (WebCodecs) uplink stream handler ---
+# Client sends one Annex-B access unit per WS BINARY message (WebCodecs emits exactly one
+# EncodedVideoChunk per frame). We decode EVERY message in arrival order (P-frames depend
+# on predecessors) but only swap the NEWEST decoded frame. Downlink stays JPEG (robust to
+# the newest-wins frame dropping; inter-frame video would break on a dropped frame).
+async def handle_ws_h264(request):
+    if not _HAVE_H264:
+        return web.json_response({'error': 'H.264 decode not available on this node'}, status=501)
+    if pipeline is None:
+        return web.json_response({'error': 'Pipeline not initialised (GPU failure)'}, status=503)
+
+    # max_msg_size=0 (unlimited): a keyframe access unit can spike past aiohttp's 4 MiB
+    # default and an oversize message would close the socket. compress=False: H.264 is
+    # already entropy-coded.
+    ws = web.WebSocketResponse(max_msg_size=0, compress=False)
+    await ws.prepare(request)
+    log.info('H264 WS connected from %s', request.remote)
+
+    # One decoder context per connection — it carries reference-frame state; never shared,
+    # never touched concurrently (we await each decode sequentially).
+    ctx = av.CodecContext.create('h264', 'r')
+    latest = [None]                 # newest decoded BGR frame (newest-wins)
+    frame_event = asyncio.Event()
+
+    def _decode_latest(data):
+        """Decode one access unit; return the newest BGR ndarray or None. Runs in a thread."""
+        try:
+            frames = ctx.decode(av.packet.Packet(data))
+        except av.error.InvalidDataError:
+            return None            # corrupt AU — decoder resyncs at the next IDR on its own
+        except Exception as e:
+            log.warning('H264 decode error: %s', e)
+            return None
+        if not frames:
+            return None            # e.g. before the first keyframe → []
+        return frames[-1].to_ndarray(format='bgr24')
+
+    async def process_loop():
+        while not ws.closed:
+            await frame_event.wait()
+            frame_event.clear()
+            bgr = latest[0]
+            latest[0] = None
+            if bgr is None:
+                continue
+            try:
+                buf, _ms = await asyncio.to_thread(_process_bgr, bgr)
+            except Exception as e:
+                log.warning('H264 frame error: %s', e)
+                continue
+            if buf is None:
+                continue
+            try:
+                await ws.send_bytes(buf)
+            except Exception:
+                break
+
+    proc_task = asyncio.create_task(process_loop())
+    try:
+        async for msg in ws:
+            if msg.type == WSMsgType.BINARY:
+                # Decode in arrival order (sequential await keeps the ctx single-threaded).
+                bgr = await asyncio.to_thread(_decode_latest, msg.data)
+                if bgr is not None:
+                    latest[0] = bgr
+                    frame_event.set()
+            elif msg.type == WSMsgType.ERROR:
+                log.error('H264 WS error: %s', ws.exception())
+                break
+    finally:
+        proc_task.cancel()
+        try:
+            await proc_task
+        except asyncio.CancelledError:
+            pass
+
+    log.info('H264 WS client disconnected')
+    return ws
+
+
 # --- Face upload ---
 async def handle_set_face(request):
     if pipeline is None:
@@ -268,6 +368,7 @@ async def handle_health(request):
         return web.json_response({'ok': False, 'gpu': False, 'error': _init_error or 'Pipeline not initialised'})
     return web.json_response({'ok': True, 'gpu': True, 'face_set': pipeline.ready,
                               'profile': pipeline.profile, 'webrtc': _HAVE_AIORTC,
+                              'h264': _HAVE_H264,
                               'ice_servers': _ice_servers_dicts()})
 
 
@@ -416,6 +517,7 @@ def build_app():
     })
 
     cors.add(app.router.add_get('/ws', handle_ws))
+    cors.add(app.router.add_get('/ws-h264', handle_ws_h264))
     cors.add(app.router.add_post('/set-face', handle_set_face))
     cors.add(app.router.add_post('/set-mode', handle_set_mode))
     cors.add(app.router.add_get('/health', handle_health))
