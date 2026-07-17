@@ -273,10 +273,35 @@ async def handle_health(request):
 _rtc_pcs = set()
 
 
+_ice_cache = {'servers': None, 'ts': 0.0}
+
+
 def _ice_servers_dicts():
-    """ICE servers as plain dicts. STUN alone can't traverse RunPod's symmetric NAT, so
-    a TURN relay is required — configured via env (TURN_URL/TURN_USER/TURN_PASS) so it's a
-    pod-config change, not a rebuild. The same list is handed to the client via /health."""
+    """ICE servers as plain dicts. RunPod's symmetric NAT needs a TURN relay; STUN alone
+    can't traverse it. Configured via env (pod-config, not a rebuild); inert (STUN-only)
+    if nothing is set. Two options:
+      METERED_API_URL — a Metered credentials URL (.../api/v1/turn/credentials?apiKey=...).
+                        The pod fetches the full, fresh ICE list (cached ~30 min).
+      TURN_URL / TURN_USER / TURN_PASS — a single static TURN server.
+    The same list is handed to the client via /health."""
+    api_url = os.environ.get('METERED_API_URL')
+    if api_url:
+        now = time.monotonic()
+        if _ice_cache['servers'] is not None and (now - _ice_cache['ts'] < 1800):
+            return _ice_cache['servers']
+        try:
+            import urllib.request
+            import json as _json
+            with urllib.request.urlopen(api_url, timeout=8) as r:
+                data = _json.loads(r.read().decode())
+            if isinstance(data, list) and data:
+                _ice_cache['servers'] = data
+                _ice_cache['ts'] = now
+                log.info('Fetched %d ICE servers from TURN provider', len(data))
+                return data
+        except Exception as e:
+            log.warning('TURN credential fetch failed (%s) — STUN only', e)
+
     servers = [{'urls': ['stun:stun.l.google.com:19302']}]
     turn = os.environ.get('TURN_URL')
     if turn:
