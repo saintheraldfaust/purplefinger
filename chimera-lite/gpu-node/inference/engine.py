@@ -1055,6 +1055,23 @@ class EnhanceEngine:
         if enhanced.dtype != np.uint8:
             enhanced = np.clip(enhanced, 0, 255).astype(np.uint8)
 
+        # --- Tone-lock GFPGAN (fix its FFHQ light-skin bias) ---
+        # GFPGAN is trained on a light-skinned distribution and re-lightens/desaturates
+        # darker skin, undoing the identity-relative complexion match done before enhance.
+        # Keep only GFPGAN's HIGH-FREQUENCY luminance (pores, eyes, teeth, sharpening) and
+        # restore the pre-enhance crop's chroma (a,b) + low-frequency luminance (complexion),
+        # so it adds detail without shifting skin tone. Preserves light faces; stops the
+        # whitening on dark faces. `aligned` and `enhanced` are both 512x512 aligned crops.
+        try:
+            enh_lab = cv2.cvtColor(enhanced, cv2.COLOR_BGR2LAB).astype(np.float32)
+            ali_lab = cv2.cvtColor(aligned, cv2.COLOR_BGR2LAB).astype(np.float32)
+            sigma = 11.0
+            detail_L = enh_lab[:, :, 0] - cv2.GaussianBlur(enh_lab[:, :, 0], (0, 0), sigma)
+            ali_lab[:, :, 0] = np.clip(cv2.GaussianBlur(ali_lab[:, :, 0], (0, 0), sigma) + detail_L, 0.0, 255.0)
+            enhanced = cv2.cvtColor(ali_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+        except Exception as e:
+            log.warning('tone-lock skipped: %s', e)
+
         # Warp enhanced face back to original frame coordinates
         M_inv = cv2.invertAffineTransform(M)
         restored = cv2.warpAffine(enhanced, M_inv, (w, h), flags=cv2.INTER_LINEAR)
