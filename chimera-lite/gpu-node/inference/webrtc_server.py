@@ -121,7 +121,9 @@ def _full_pipeline(raw_bytes: bytes):
 async def handle_ws(request):
     global _fps_frame_count, _fps_window_start
 
-    ws = web.WebSocketResponse(max_msg_size=5 * 1024 * 1024)
+    # compress=False: frames are already-compressed JPEG, so permessage-deflate burns
+    # event-loop CPU (the thread that dispatches the GPU) for ~0% size gain. Disable it.
+    ws = web.WebSocketResponse(max_msg_size=5 * 1024 * 1024, compress=False)
     await ws.prepare(request)
     log.info('WS connected from %s', request.remote)
 
@@ -284,6 +286,34 @@ def _ice_servers_dicts():
                         The pod fetches the full, fresh ICE list (cached ~30 min).
       TURN_URL / TURN_USER / TURN_PASS — a single static TURN server.
     The same list is handed to the client via /health."""
+    # --- Cloudflare Realtime TURN (preferred: anycast = close relay = low latency) ---
+    cf_key = os.environ.get('CLOUDFLARE_TURN_KEY_ID')
+    cf_token = os.environ.get('CLOUDFLARE_TURN_TOKEN')
+    if cf_key and cf_token:
+        now = time.monotonic()
+        if _ice_cache['servers'] is not None and (now - _ice_cache['ts'] < 1800):
+            return _ice_cache['servers']
+        try:
+            import urllib.request
+            import json as _json
+            req = urllib.request.Request(
+                'https://rtc.live.cloudflare.com/v1/turn/keys/%s/credentials/generate' % cf_key,
+                data=_json.dumps({'ttl': 86400}).encode(),
+                headers={'Authorization': 'Bearer %s' % cf_token,
+                         'Content-Type': 'application/json'},
+                method='POST')
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = _json.loads(r.read().decode())
+            ice = data.get('iceServers')
+            if ice:
+                servers = ice if isinstance(ice, list) else [ice]
+                _ice_cache['servers'] = servers
+                _ice_cache['ts'] = now
+                log.info('Fetched Cloudflare TURN credentials (%d entries)', len(servers))
+                return servers
+        except Exception as e:
+            log.warning('Cloudflare TURN fetch failed (%s) — trying next option', e)
+
     api_url = os.environ.get('METERED_API_URL')
     if api_url:
         now = time.monotonic()

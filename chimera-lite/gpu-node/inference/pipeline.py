@@ -9,6 +9,7 @@ GFPGAN runs on each face bbox crop (not full frame) — no pulsing.
 """
 
 import logging
+import os
 import time
 import numpy as np
 
@@ -25,12 +26,16 @@ STREAM_PROFILES = {
     'realtime': {
         'enhance_enabled': False,
         'enhance_every_n': 0,
-        'detect_every_n': 1,   # every frame — ROI detection is only ~3-5ms on RTX 5090/4090
+        'detect_every_n': 2,   # every 2nd frame — tracker (stale_face_ttl=2) coasts the gap
         'smooth_alpha': 0.92,  # fast convergence; velocity-adaptive code snaps on big moves
         'stale_face_ttl': 2,   # clear after 2 consecutive misses (~100ms) — no ghost overlay
-        'proc_w': 512,
-        'proc_h': 288,
-        'jpeg_quality': 85,
+        # proc matches the client send res (320x180) so both resizes in _full_pipeline
+        # short-circuit — no upscale-then-downscale waste on a latency-critical path.
+        'proc_w': 320,
+        'proc_h': 180,
+        # Downlink is a re-encode of an already-degraded client JPEG on a bandwidth-gated
+        # link; q65 roughly halves downlink bytes vs q85 with little visible loss.
+        'jpeg_quality': 65,
     },
     'quality': {
         'enhance_enabled': True,
@@ -76,9 +81,10 @@ class FaceSwapPipeline:
             log.warning('EnhanceEngine failed to load (%s) — running without enhancement', e)
             self.enhance = None
 
-        # Default profile: high quality (GFPGAN every frame). Go through set_profile so
-        # the enhance cadence + detect cadence + tracking config are actually applied.
-        self.set_profile('hq')
+        # Default to the latency-first realtime profile (no GFPGAN). Booting 'hq' meant
+        # GFPGAN ran on every frame (40-160ms) and serially gated RECV fps at ~6-21 until
+        # something pushed a profile switch. Override with STREAM_PROFILE env if needed.
+        self.set_profile(os.environ.get('STREAM_PROFILE', 'realtime'))
 
     @property
     def ready(self) -> bool:
